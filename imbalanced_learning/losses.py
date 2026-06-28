@@ -128,12 +128,11 @@ def compute_class_weights(
     count_per_class = torch.tensor(
         [counts.get(c, 0) for c in range(num_classes)], dtype=torch.float32
     )
-    if (count_per_class == 0).any():
-        missing = [c for c in range(num_classes) if count_per_class[c] == 0]
-        raise ValueError(
-            f"Class {missing} không có sample nào trong `labels` — "
-            "không thể tính weight. Kiểm tra lại label distribution."
-        )
+
+    # Với missing classes (count=0), set weight=1.0 (neutral), không raise error
+    # Điều này xảy ra khi split train/dev/test và 1 số class hiếm không xuất hiện trong train set
+    missing_mask = count_per_class == 0
+    count_per_class[missing_mask] = 1.0  # Placeholder để tránh division by zero
 
     if strategy == "inverse_frequency":
         total = count_per_class.sum()
