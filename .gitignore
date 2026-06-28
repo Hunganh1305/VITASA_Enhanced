@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Model checkpoints (quá nặng cho GitHub)
+experiments/results/*/best_model.pt
+
+# Raw ViTASA clone (đã có baseline/data/ rồi)
+ViTASA/
+
+# Jupyter
+.ipynb_checkpoints/
