@@ -123,8 +123,9 @@ class TASADataset(Dataset):
                 truncation=True,
                 padding="max_length",
                 return_offsets_mapping=True,
+                return_tensors=None,
             )
-            offsets = enc["offset_mapping"]  # [(char_start, char_end), ...]
+            offsets = enc.get("offset_mapping") or [(0, 0)] * len(enc["input_ids"])
 
             token_labels = [o_id] * len(offsets)
 
