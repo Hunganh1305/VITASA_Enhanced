@@ -122,24 +122,12 @@ class TASADataset(Dataset):
                 max_length=max_len,
                 truncation=True,
                 padding="max_length",
+                return_offsets_mapping=True,
                 return_tensors=None,
             )
-            # PhoBERT tokenizer không support offset_mapping trực tiếp
-            # Tính bằng cách decode từng token rồi find position
-            input_ids = enc["input_ids"]
-            offsets = []
-            pos = 0
-            for token_id in input_ids:
-                token_str = tokenizer.decode([token_id]).strip()
-                if not token_str or token_id in (tokenizer.cls_token_id, tokenizer.sep_token_id, tokenizer.pad_token_id):
-                    offsets.append((0, 0))
-                else:
-                    idx = text.find(token_str, pos)
-                    if idx >= 0:
-                        offsets.append((idx, idx + len(token_str)))
-                        pos = idx + len(token_str)
-                    else:
-                        offsets.append((pos, pos))
+            # offset_mapping từ fast tokenizer — chính xác hơn manual decode
+            # Nếu slow tokenizer không trả về offset_mapping thì fallback về [(0,0)]
+            offsets = enc.get("offset_mapping") or [(0, 0)] * len(enc["input_ids"])
 
             token_labels = [o_id] * len(offsets)
 
