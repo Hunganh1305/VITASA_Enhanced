@@ -1,11 +1,11 @@
 """
-train.py — Fine-tune PhoBERT trên ViTASA cho task TASA (entry point chính).
+train.py — Fine-tune PhoBERT / ViSoBERT trên ViTASA cho task TASA (entry point chính).
 
 Task: Token classification với BIO tagging.
 Mỗi subword token được gán nhãn O, B-ASPECT#SENTIMENT, hoặc I-ASPECT#SENTIMENT.
 
 Ví dụ dùng (4 config ablation):
-    # C1 — baseline gốc
+    # C1 — baseline gốc (PhoBERT)
     python train.py --domain mobile --loss ce
 
     # C2 — + Text Normalization
@@ -16,6 +16,9 @@ Ví dụ dùng (4 config ablation):
 
     # C4 — + cả hai
     python train.py --domain mobile --loss focal --normalize
+
+    # C4 với ViSoBERT (backbone thay thế, pre-train trên social media)
+    python train.py --domain mobile --loss focal --normalize --model visobert
 
 Chạy trên Google Colab:
     !python train.py --domain mobile --loss focal --normalize --epochs 10
@@ -49,7 +52,11 @@ from imbalanced_learning.losses import (
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MODEL_NAME = "vinai/phobert-base-v2"
+MODEL_REGISTRY = {
+    "phobert": "vinai/phobert-base-v2",
+    "visobert": "uitnlp/visobert",
+}
+
 MAX_LEN = 256
 BATCH_SIZE = 16
 LR = 2e-5
@@ -194,9 +201,9 @@ class TASADataset(Dataset):
 # ── Model ─────────────────────────────────────────────────────────────────────
 
 class TASAModel(nn.Module):
-    def __init__(self, num_labels: int):
+    def __init__(self, num_labels: int, model_name: str):
         super().__init__()
-        self.bert = AutoModel.from_pretrained(MODEL_NAME)
+        self.bert = AutoModel.from_pretrained(model_name)
         self.dropout = nn.Dropout(0.1)
         self.classifier = nn.Linear(self.bert.config.hidden_size, num_labels)
 
@@ -295,12 +302,16 @@ def main():
     parser.add_argument("--domain", choices=["mobile", "restaurant", "hotel"], required=True)
     parser.add_argument("--loss", choices=["ce", "weighted_ce", "focal"], default="ce")
     parser.add_argument("--normalize", action="store_true", help="Áp dụng TextNormalizer")
+    parser.add_argument("--model", choices=list(MODEL_REGISTRY.keys()), default="phobert",
+                        help="Backbone model (default: phobert)")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--output", type=str, default=None,
                         help="Thư mục lưu checkpoint (default: experiments/results/<config>/)")
     args = parser.parse_args()
 
-    config_name = f"{args.domain}_loss-{args.loss}{'_norm' if args.normalize else ''}"
+    model_name = MODEL_REGISTRY[args.model]
+    model_suffix = f"_{args.model}" if args.model != "phobert" else ""
+    config_name = f"{args.domain}_loss-{args.loss}{'_norm' if args.normalize else ''}{model_suffix}"
     output_dir = Path(args.output) if args.output else ROOT / "experiments" / "results" / config_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -324,7 +335,7 @@ def main():
     print(f"Labels: {num_labels} (including O)")
 
     # Tokenizer & normalizer
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     normalizer = TextNormalizer() if args.normalize else None
 
     # Datasets
@@ -342,7 +353,7 @@ def main():
     loss_fn = build_loss_fn(args.loss, train_labels_flat, num_labels, device)
 
     # Model
-    model = TASAModel(num_labels).to(device)
+    model = TASAModel(num_labels, model_name).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
     total_steps = len(train_loader) * args.epochs
     scheduler = get_linear_schedule_with_warmup(
@@ -371,6 +382,7 @@ def main():
     summary = {
         "config": config_name,
         "domain": args.domain,
+        "model": args.model,
         "loss": args.loss,
         "normalize": args.normalize,
         "epochs": args.epochs,
