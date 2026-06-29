@@ -27,6 +27,7 @@ import argparse
 import difflib
 import json
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -104,8 +105,17 @@ class TASADataset(Dataset):
 
     @staticmethod
     def _preprocess(samples, tokenizer, label2id, normalizer, max_len):
+        """Word-level alignment — không cần fast tokenizer hay offset_mapping.
+
+        Approach:
+        1. Split text thành words với char offsets (dùng regex)
+        2. Gán B/I/O label cho từng word dựa trên char spans của dataset
+        3. Tokenize từng word riêng để đếm số subword tokens
+        4. Propagate word label → tất cả subword tokens của word đó
+        """
         o_id = label2id["O"]
         records = []
+
         for s in samples:
             original = s["data"]
 
@@ -117,47 +127,58 @@ class TASADataset(Dataset):
                 offset_map = None
                 text = original
 
-            enc = tokenizer(
-                text,
-                max_length=max_len,
-                truncation=True,
-                padding="max_length",
-                return_offsets_mapping=True,
-                return_tensors=None,
-            )
-            # offset_mapping từ fast tokenizer — chính xác hơn manual decode
-            # Nếu slow tokenizer không trả về offset_mapping thì fallback về [(0,0)]
-            offsets = enc.get("offset_mapping") or [(0, 0)] * len(enc["input_ids"])
+            # Bước 1: tách words và lưu char offsets
+            word_matches = list(re.finditer(r"\S+", text))
+            words = [m.group() for m in word_matches]
+            word_spans = [(m.start(), m.end()) for m in word_matches]
 
-            token_labels = [o_id] * len(offsets)
-
+            # Bước 2: gán label ở word level
+            word_labels = [o_id] * len(words)
             for char_start, char_end, cat in s["label"]:
                 b_tag = f"B-{cat}"
                 i_tag = f"I-{cat}"
                 if b_tag not in label2id:
                     continue
 
-                # Remap char offsets nếu đã normalize
                 if offset_map is not None:
-                    norm_start = offset_map.get(char_start, char_start)
-                    # char_end - 1 vì offset_map map từng char, end là exclusive
-                    norm_end = offset_map.get(char_end - 1, char_end - 1) + 1
+                    ns = offset_map.get(char_start, char_start)
+                    ne = offset_map.get(char_end - 1, char_end - 1) + 1
                 else:
-                    norm_start, norm_end = char_start, char_end
+                    ns, ne = char_start, char_end
 
                 first = True
-                for i, (cs, ce) in enumerate(offsets):
-                    if cs == 0 and ce == 0:  # special token ([CLS], [SEP], padding)
-                        continue
-                    if cs < norm_end and ce > norm_start:  # token overlap với span
-                        if first:
-                            token_labels[i] = label2id[b_tag]
-                            first = False
-                        else:
-                            token_labels[i] = label2id.get(i_tag, o_id)
+                for wi, (ws, we) in enumerate(word_spans):
+                    if ws < ne and we > ns:
+                        word_labels[wi] = label2id[b_tag] if first else label2id.get(i_tag, o_id)
+                        first = False
+
+            # Bước 3: tokenize toàn bộ sequence, padding đến max_len
+            enc = tokenizer(
+                words,
+                is_split_into_words=True,
+                max_length=max_len,
+                truncation=True,
+                padding="max_length",
+                return_tensors=None,
+            )
+
+            # Bước 4: propagate word label → subword tokens
+            # CLS = index 0 → o_id; sau đó từng word chiếm N subword tokens
+            input_ids = enc["input_ids"]
+            token_labels = [o_id] * len(input_ids)
+
+            token_idx = 1  # bỏ qua CLS
+            for wi, word in enumerate(words):
+                if token_idx >= len(input_ids):
+                    break
+                n_sub = len(tokenizer.tokenize(word)) or 1
+                for j in range(n_sub):
+                    if token_idx + j < len(input_ids):
+                        token_labels[token_idx + j] = word_labels[wi]
+                token_idx += n_sub
 
             records.append({
-                "input_ids": torch.tensor(enc["input_ids"], dtype=torch.long),
+                "input_ids": torch.tensor(input_ids, dtype=torch.long),
                 "attention_mask": torch.tensor(enc["attention_mask"], dtype=torch.long),
                 "labels": torch.tensor(token_labels, dtype=torch.long),
             })
