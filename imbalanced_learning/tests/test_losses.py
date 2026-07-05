@@ -142,10 +142,13 @@ def test_effective_number_minority_gets_higher_weight():
     assert torch.allclose(weights.mean(), torch.tensor(1.0), atol=1e-4)
 
 
-def test_compute_class_weights_missing_class_raises():
+def test_compute_class_weights_missing_class_neutral_weight():
+    # Missing class nhận weight = 1.0 (neutral) thay vì raise error,
+    # vì rare aspect-sentiment classes có thể không xuất hiện trong train split
     labels = [0, 0, 1, 1]  # thiếu class 2
-    with pytest.raises(ValueError):
-        compute_class_weights(labels, num_classes=3)
+    weights = compute_class_weights(labels, num_classes=3)
+    assert weights.shape == (3,)
+    assert weights[2].item() > 0  # không crash, weight > 0
 
 
 def test_compute_class_weights_balanced_gives_equal_weight():
