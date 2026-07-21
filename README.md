@@ -20,7 +20,12 @@ Baseline model: PhoBERT fine-tuned on [ViTASA dataset](https://github.com/kh4nh1
 
 ```
 VITASA_Enhanced/
-├── train.py                 # Fine-tune PhoBERT (4 ablation configs)
+├── train_pair.py            # ✨ NEW — Fine-tune PhoBERT (pair classification) ← USE THIS
+├── run_pair_ablation.sh     # ✨ NEW — Run 4 configs × 3 domains
+├── summarize_pair_results.py # ✨ NEW — Print ablation results table
+├── FORMULATION_FIX_2026-07-20.md  # ✨ NEW — Why BIO tagging was wrong
+│
+├── train.py                 # ⚠️  OLD — BIO span tagging (deprecated, legacy only)
 ├── demo_normalizer.py       # Interactive demo — Text Normalization
 ├── demo_losses.py           # Interactive demo — Imbalanced Learning
 ├── requirements.txt
@@ -55,6 +60,18 @@ VITASA_Enhanced/
 
 ---
 
+## ⚠️ IMPORTANT UPDATE — 2026-07-20
+
+**Formulation fix detected:** Previous results (train.py) used **BIO span tagging** (wrong),
+but paper ViTASA uses **target-aspect pair classification** (correct). This caused massive
+gap in macro F1 thresholds.
+
+**→ Use `train_pair.py` instead of `train.py` for all new experiments & baseline comparison.**
+
+Details: [FORMULATION_FIX_2026-07-20.md](FORMULATION_FIX_2026-07-20.md)
+
+---
+
 ## Usage
 
 **Install dependencies:**
@@ -62,10 +79,22 @@ VITASA_Enhanced/
 pip install -r requirements.txt
 ```
 
-**Run training (single config):**
+**Run training — PAIR CLASSIFICATION (correct formulation):**
+```bash
+python train_pair.py --domain mobile --loss ce --epochs 3
+```
+
+**Run full ablation (4 configs × 3 domains):**
+```bash
+./run_pair_ablation.sh
+python3 summarize_pair_results.py  # Print results table
+```
+
+**Legacy — BIO span tagging (not recommended for baseline comparison):**
 ```bash
 python train.py --domain mobile --loss focal --normalize --epochs 10
 ```
+[See warning inside train.py]
 
 **Run all 4 configs × 3 domains on Google Colab:**
 ```bash

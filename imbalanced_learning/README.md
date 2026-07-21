@@ -12,7 +12,7 @@ imbalanced_learning/
 ├── losses.py             # FocalLoss, WeightedCrossEntropyLoss, compute_class_weights
 ├── cli.py                 # demo CLI (sample distribution có sẵn + tự nhập)
 ├── tests/
-│   └── test_losses.py    # 13 unit test (pytest)
+│   └── test_losses.py    # 17 unit test (pytest)
 └── README.md
 ```
 
@@ -51,8 +51,18 @@ Tính trọng số class từ label distribution thực tế của ViTASA datase
   mỗi sample mới có xác suất giảm dần đóng góp thông tin (effective number
   of samples) — phù hợp khi minority class cực ít (case của Neutral trong
   ViTASA, theo paper gốc).
+- `"pos_neg_ratio"` (thêm 2026-07-16): `weight_c = (N - count_c) / count_c`
+  — công thức `pos_weight` dùng trong paper **ViGoEmotions** (Tran et al.,
+  EACL 2026, cùng nhóm tác giả ViTASA) cho `BCEWithLogitsLoss` multilabel.
+  Ở đây thích ứng sang multi-class bằng cách coi mỗi class là bài toán
+  binary "class c vs phần còn lại" — không chia đều theo `num_classes` như
+  `inverse_frequency` nên tăng mạnh hơn cho class rất hiếm (test
+  `test_pos_neg_ratio_more_extreme_than_inverse_frequency_for_rare_class`
+  minh họa điều này). Chưa biết có tốt hơn 2 chiến lược kia trên ViTASA thật
+  hay không — nên đưa vào ablation so sánh, không mặc định thay
+  `effective_number`.
 
-Cả 2 chiến lược đều chuẩn hóa để `weights.mean() == 1`, giữ scale loss ổn
+Cả 3 chiến lược đều chuẩn hóa để `weights.mean() == 1`, giữ scale loss ổn
 định khi so sánh giữa các config trong ablation.
 
 ## Cách dùng

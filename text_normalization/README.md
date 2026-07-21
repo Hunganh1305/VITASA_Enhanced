@@ -78,6 +78,31 @@ Khuyến nghị: khi reproduce baseline và nhìn dataset thật, lọc các com
 nhiều OOV token (so với PhoBERT vocab) để bổ sung dần — đây nên là một bước
 trong pipeline thực nghiệm, không làm thủ công 100%.
 
+## Option ablation: `keep_expressive_markers` (2026-07-16)
+
+Mặc định, các marker biểu cảm/tiếng cười trong từ điển (`hihi`, `haha`,
+`huhu`, `kk`, `kkk` — nhóm `_section_misc`) bị **xóa hẳn** (map sang `""`).
+
+Paper **ViGoEmotions** (Tran et al., EACL 2026 — cùng nhóm tác giả với
+ViTASA) thử nghiệm giữ nguyên vs. convert vs. loại bỏ **emoji** trên dataset
+cảm xúc mạng xã hội tiếng Việt, và thấy giữ nguyên emoji cho Macro-F1 cao
+hơn trên hầu hết backbone, kể cả ViSoBERT (62.33% vs các scenario khác).
+Marker tiếng cười có thể đóng vai trò tín hiệu cảm xúc tương tự emoji (đặc
+biệt cho polarity Positive/amusement), nên việc xóa hẳn có thể đang làm mất
+tín hiệu — nhưng finding này chưa được verify trên chính dataset ViTASA.
+
+```python
+# Hành vi cũ (mặc định, không đổi)
+TextNormalizer()("ngon quá kk")        # -> "ngon quá" (kk bị xóa)
+
+# Ablation mới: giữ nguyên marker biểu cảm
+TextNormalizer(keep_expressive_markers=True)("ngon quá kk")  # -> "ngon quá kk"
+```
+
+Wire sẵn trong `train.py` qua flag `--keep-expressive` (chỉ có tác dụng khi
+kèm `--normalize`) — nên chạy ablation so sánh có/không trước khi chốt default
+cho kết quả chính thức, thay vì đoán.
+
 ## Limitation (đã biết, ghi cho phần report)
 
 - **Không reorder câu**: word-level replacement giữ nguyên vị trí, nên cụm
