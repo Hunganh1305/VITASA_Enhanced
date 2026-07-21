@@ -160,3 +160,39 @@ def test_compute_class_weights_balanced_gives_equal_weight():
 def test_invalid_strategy_raises():
     with pytest.raises(ValueError):
         compute_class_weights([0, 1, 2], num_classes=3, strategy="not_a_real_strategy")
+
+
+def test_pos_neg_ratio_known_values():
+    # 3 class: 600/300/100 sample, total=1000
+    # raw weight_c = (total - count_c) / count_c
+    # class0: (1000-600)/600=0.6667, class1: (1000-300)/300=2.3333, class2: (1000-100)/100=9.0
+    # mean_raw = 4.0 -> normalized: [0.1667, 0.5833, 2.25]
+    labels = [0] * 600 + [1] * 300 + [2] * 100
+    weights = compute_class_weights(labels, num_classes=3, strategy="pos_neg_ratio")
+
+    expected = torch.tensor([0.1667, 0.5833, 2.25])
+    assert torch.allclose(weights, expected, atol=1e-3)
+    assert torch.allclose(weights.mean(), torch.tensor(1.0), atol=1e-5)
+
+
+def test_pos_neg_ratio_minority_gets_higher_weight():
+    labels = [0] * 700 + [1] * 250 + [2] * 50
+    weights = compute_class_weights(labels, num_classes=3, strategy="pos_neg_ratio")
+    assert weights[2] > weights[1] > weights[0]
+    assert torch.allclose(weights.mean(), torch.tensor(1.0), atol=1e-4)
+
+
+def test_pos_neg_ratio_balanced_gives_equal_weight():
+    labels = [0] * 100 + [1] * 100 + [2] * 100
+    weights = compute_class_weights(labels, num_classes=3, strategy="pos_neg_ratio")
+    assert torch.allclose(weights, torch.ones(3), atol=1e-5)
+
+
+def test_pos_neg_ratio_more_extreme_than_inverse_frequency_for_rare_class():
+    # pos_neg_ratio không chia đều theo num_classes như inverse_frequency, nên
+    # với class rất hiếm, weight phải tăng mạnh hơn (đúng như nhận xét trong
+    # docstring) — kiểm tra để tránh 2 strategy vô tình trùng công thức.
+    labels = [0] * 700 + [1] * 250 + [2] * 50
+    w_inv = compute_class_weights(labels, num_classes=3, strategy="inverse_frequency")
+    w_pnr = compute_class_weights(labels, num_classes=3, strategy="pos_neg_ratio")
+    assert w_pnr[2].item() > w_inv[2].item()

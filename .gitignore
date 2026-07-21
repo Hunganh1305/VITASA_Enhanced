@@ -7,11 +7,15 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Model checkpoints (quá nặng cho GitHub)
-experiments/results/*/best_model.pt
+# Toàn bộ experiments/ (model checkpoints + results — quá nặng, tạo lại được)
+experiments/
 
 # Raw ViTASA clone (đã có baseline/data/ rồi)
 ViTASA/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Logs
+logs/
+*.log

@@ -91,3 +91,30 @@ def test_laughter_removed(normalizer):
     # "kk", "haha" map sang rỗng -> không còn xuất hiện trong câu kết quả
     result = normalizer("ngon quá kk")
     assert "kk" not in result.split()
+
+
+# ---- keep_expressive_markers (ViGoEmotions-inspired ablation option) ----
+
+def test_keep_expressive_markers_default_false_still_removes():
+    # Default (không truyền param) phải giữ đúng hành vi cũ — không phá kết
+    # quả/test đã có trước đây.
+    normalizer = TextNormalizer()
+    assert normalizer.keep_expressive_markers is False
+    result = normalizer("ngon quá kk haha")
+    assert "kk" not in result.split()
+    assert "haha" not in result.split()
+
+
+def test_keep_expressive_markers_true_preserves_token():
+    normalizer = TextNormalizer(keep_expressive_markers=True)
+    result = normalizer("ngon quá kk haha")
+    assert "kk" in result.split()
+    assert "haha" in result.split()
+
+
+def test_keep_expressive_markers_does_not_affect_other_lookups():
+    # Bật keep_expressive_markers không được ảnh hưởng tới các entry khác
+    # (chỉ áp dụng cho entry map sang "").
+    normalizer = TextNormalizer(keep_expressive_markers=True)
+    assert normalizer.normalize_token("pyn") == "bạn"
+    assert normalizer.normalize_token("vcl") == "rất"

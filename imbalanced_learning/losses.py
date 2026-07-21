@@ -10,8 +10,11 @@ Gồm:
       tốt (easy example), tập trung học vào sample khó / minority class.
     - WeightedCrossEntropyLoss: Cross-Entropy có trọng số theo class.
     - compute_class_weights(): tính trọng số class từ label distribution,
-      hỗ trợ 2 chiến lược "inverse_frequency" và "effective_number"
-      (Class-Balanced Loss, Cui et al. 2019).
+      hỗ trợ 3 chiến lược "inverse_frequency", "effective_number"
+      (Class-Balanced Loss, Cui et al. 2019), và "pos_neg_ratio" (one-vs-rest
+      pos_weight, theo công thức dùng trong ViGoEmotions — Tran et al.,
+      EACL 2026 — cho multilabel BCE; ở đây thích ứng cho multi-class CE
+      bằng cách coi mỗi class là 1 bài toán binary class-vs-rest).
 
 Tất cả đều là drop-in replacement cho torch.nn.CrossEntropyLoss trong
 training loop fine-tune PhoBERT/ViSoBERT (nhận logits [N, C] và label [N]).
@@ -104,7 +107,9 @@ class WeightedCrossEntropyLoss(nn.Module):
 def compute_class_weights(
     labels: Iterable[int],
     num_classes: int,
-    strategy: Literal["inverse_frequency", "effective_number"] = "effective_number",
+    strategy: Literal[
+        "inverse_frequency", "effective_number", "pos_neg_ratio"
+    ] = "effective_number",
     beta: float = 0.999,
 ) -> torch.Tensor:
     """Tính trọng số class từ label distribution thực tế (vd của ViTASA dataset).
@@ -119,7 +124,13 @@ def compute_class_weights(
               weight_c = (1 - beta) / (1 - beta^count_c), sau đó chuẩn hóa
               để trung bình = 1. Mềm hơn inverse_frequency khi count_c lớn,
               tránh weight quá cực đoan cho class rất ít sample.
-        beta: chỉ dùng cho "effective_number", thường 0.99 - 0.9999.
+            - "pos_neg_ratio": weight_c = (N - count_c) / count_c — công thức
+              pos_weight dùng trong ViGoEmotions (Tran et al., EACL 2026) cho
+              BCEWithLogits multilabel, coi mỗi class là 1 bài toán binary
+              "class c vs phần còn lại". Tăng mạnh hơn inverse_frequency cho
+              class rất hiếm (vd Neutral trong ViTASA) vì không chia đều theo
+              num_classes — nên so sánh cả 3 chiến lược trong ablation thay vì
+              mặc định 1 cái.
 
     Returns:
         Tensor [num_classes], dtype float32.
@@ -128,6 +139,7 @@ def compute_class_weights(
     count_per_class = torch.tensor(
         [counts.get(c, 0) for c in range(num_classes)], dtype=torch.float32
     )
+    total = count_per_class.sum()
 
     # Với missing classes (count=0), set weight=1.0 (neutral), không raise error
     # Điều này xảy ra khi split train/dev/test và 1 số class hiếm không xuất hiện trong train set
@@ -135,11 +147,12 @@ def compute_class_weights(
     count_per_class[missing_mask] = 1.0  # Placeholder để tránh division by zero
 
     if strategy == "inverse_frequency":
-        total = count_per_class.sum()
         weights = total / (num_classes * count_per_class)
     elif strategy == "effective_number":
         effective_num = 1.0 - torch.pow(beta, count_per_class)
         weights = (1.0 - beta) / effective_num
+    elif strategy == "pos_neg_ratio":
+        weights = (total - count_per_class) / count_per_class
     else:
         raise ValueError(f"Không hỗ trợ strategy={strategy!r}")
 
@@ -159,6 +172,9 @@ if __name__ == "__main__":
 
     weights_inv = compute_class_weights(labels, num_classes=3, strategy="inverse_frequency")
     print("Class weights (inverse_frequency):", weights_inv.tolist())
+
+    weights_pnr = compute_class_weights(labels, num_classes=3, strategy="pos_neg_ratio")
+    print("Class weights (pos_neg_ratio, ViGoEmotions-style):", weights_pnr.tolist())
 
     # So sánh loss giữa CE thường, Weighted CE, Focal Loss trên 1 batch giả lập
     logits = torch.randn(8, 3)

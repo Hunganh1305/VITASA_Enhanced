@@ -15,6 +15,19 @@ Limitation (xem README.md):
     - Không reorder lại câu (word-level replacement, giữ nguyên thứ tự từ)
     - Không sửa lỗi chính tả ngoài từ điển (không phải spelling correction model)
     - Không phục hồi dấu (không xử lý "khong dau" -> "không dấu")
+
+Ghi chú (2026-07-16): mặc định module này xóa hẳn các marker biểu cảm/tiếng
+cười ("hihi", "haha", "kk"...) bằng cách map sang chuỗi rỗng trong từ điển.
+Paper ViGoEmotions (Tran et al., EACL 2026 — cùng nhóm tác giả với ViTASA)
+cho thấy với emoji — vốn đóng vai trò tương tự (tín hiệu cảm xúc phi văn
+bản trong social media) — GIỮ NGUYÊN cho Macro-F1 cao hơn convert/loại bỏ,
+trên cả ViSoBERT lẫn CafeBERT. Marker tiếng cười có thể có vai trò tương tự
+với sentiment (đặc biệt amusement/positive). Vì chưa có kết quả thực nghiệm
+trên chính dataset ViTASA để khẳng định hướng nào tốt hơn, hành vi mặc định
+(XÓA, giữ nguyên như code cũ) không đổi — để không phá test/kết quả đã chạy
+trước đó — nhưng thêm tham số `keep_expressive_markers` để bật giữ nguyên
+marker này thay vì xóa, dùng làm 1 chiều ablation mới (xem --keep-expressive
+trong train.py).
 """
 
 from __future__ import annotations
@@ -41,11 +54,30 @@ _NO_SPACE_AFTER = set("([{「")
 
 
 class TextNormalizer:
-    """Rule-based normalizer cho văn bản review tiếng Việt trên mạng xã hội."""
+    """Rule-based normalizer cho văn bản review tiếng Việt trên mạng xã hội.
 
-    def __init__(self, dict_path: str | Path = _DEFAULT_DICT_PATH):
+    Args:
+        dict_path: đường dẫn từ điển teencode/viết tắt.
+        keep_expressive_markers: mặc định False (giữ hành vi cũ) — các marker
+            biểu cảm/tiếng cười trong từ điển map sang "" (vd "haha", "kk")
+            sẽ bị xóa khỏi câu như trước. Set True để GIỮ NGUYÊN token gốc
+            thay vì xóa — dựa theo finding của paper ViGoEmotions (EACL 2026)
+            rằng emoji/marker biểu cảm giữ nguyên cho kết quả sentiment tốt
+            hơn convert/loại bỏ. Dùng để ablate, xem docstring đầu file.
+    """
+
+    def __init__(
+        self,
+        dict_path: str | Path = _DEFAULT_DICT_PATH,
+        keep_expressive_markers: bool = False,
+    ):
         self.dict_path = Path(dict_path)
+        self.keep_expressive_markers = keep_expressive_markers
         self.lexicon, self.phrase_lexicon = self._load_lexicon(self.dict_path)
+        # Marker biểu cảm = entry map sang chuỗi rỗng (vd "haha", "kk", "hihi").
+        # Tách riêng để normalize_token có thể xử lý khác đi khi
+        # keep_expressive_markers=True, không cần hardcode danh sách token.
+        self._expressive_markers = {k for k, v in self.lexicon.items() if v == ""}
         # Phrase patterns: nhiều từ -> dài nhất trước, tránh bị match thiếu bởi cụm con
         self._phrase_patterns = [
             (re.compile(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", re.IGNORECASE), repl)
@@ -83,6 +115,9 @@ class TextNormalizer:
     def normalize_token(self, token: str) -> str:
         """Tra từ điển cho 1 token; trả về nguyên bản nếu không có trong từ điển."""
         key = token.lower()
+        if key in self._expressive_markers and self.keep_expressive_markers:
+            # Giữ nguyên token gốc thay vì xóa (xem docstring class + đầu file)
+            return token
         if key in self.lexicon:
             return self.lexicon[key]
         return token
