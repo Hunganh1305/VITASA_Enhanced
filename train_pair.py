@@ -345,17 +345,31 @@ def build_loss_fn(loss_type, train_labels, num_labels, device, weight_strategy="
 
 # ── Train / Eval ──────────────────────────────────────────────────────────────
 
-def train_epoch(model, loader, optimizer, scheduler, loss_fn, device):
+def train_epoch(model, loader, optimizer, scheduler, loss_fn, device, scaler=None):
     model.train()
     total_loss = 0.0
+    use_amp = scaler is not None
     for batch in loader:
-        logits = model(batch["input_ids"].to(device), batch["attention_mask"].to(device))
-        loss = loss_fn(logits, batch["label"].to(device))
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+        labels = batch["label"].to(device)
 
         optimizer.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+        if use_amp:
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                logits = model(input_ids, attention_mask)
+                loss = loss_fn(logits, labels)
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            logits = model(input_ids, attention_mask)
+            loss = loss_fn(logits, labels)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
         scheduler.step()
         total_loss += loss.item()
     return total_loss / len(loader)
@@ -431,6 +445,10 @@ def main():
                         "phân bố benchmark). Giảm xuống giúp train nhanh hơn nhiều nhưng "
                         "làm lệch phân bố so với paper — chỉ dùng để thử nghiệm.")
     p.add_argument("--output", type=str, default=None)
+    p.add_argument("--fp16", action="store_true",
+                   help="Bật mixed precision (autocast + GradScaler) trên GPU CUDA để train "
+                        "nhanh hơn (~1.5-2x) và tốn ít VRAM hơn, cho phép tăng --batch-size. "
+                        "Không có tác dụng trên CPU/MPS (tự động bỏ qua).")
     args = p.parse_args()
 
     if not args.no_segment and not _HAS_UNDERTHESEA:
@@ -500,9 +518,15 @@ def main():
     total_steps = len(train_loader) * args.epochs
     scheduler = get_linear_schedule_with_warmup(optimizer, total_steps // 10, total_steps)
 
+    use_amp = args.fp16 and device.type == "cuda"
+    if args.fp16 and device.type != "cuda":
+        print("[fp16] Bỏ qua vì device không phải CUDA (chỉ hỗ trợ GPU NVIDIA).")
+    scaler = torch.cuda.amp.GradScaler() if use_amp else None
+    print(f"Mixed precision (fp16): {'ON' if use_amp else 'OFF'}")
+
     best_dev_f1, results = -1.0, []
     for epoch in range(1, args.epochs + 1):
-        train_loss = train_epoch(model, train_loader, optimizer, scheduler, loss_fn, device)
+        train_loss = train_epoch(model, train_loader, optimizer, scheduler, loss_fn, device, scaler)
         m = evaluate(model, dev_loader, device)
         print(f"Epoch {epoch}/{args.epochs} — loss: {train_loss:.4f} | "
               f"dev macro F1 (3 sentiment): {m['macro_f1']*100:.2f}% | acc: {m['accuracy']*100:.2f}%")
