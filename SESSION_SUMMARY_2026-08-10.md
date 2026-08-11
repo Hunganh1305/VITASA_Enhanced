@@ -16,12 +16,12 @@
 | Text Normalization module | ✅ Done — không đổi từ 11/7 |
 | Imbalanced Learning module | ✅ Done — không đổi từ 11/7 |
 | `train.py` (BIO tagging — formulation SAI, đã bỏ) | ⚠️ Giữ lại để bàn luận trong report, không dùng số liệu để so baseline |
-| `train_pair.py` (pair classification — formulation ĐÚNG) | ✅ Code xong + đã thêm fp16 hôm nay |
-| Ablation domain **hotel** (4 config × 5 epoch, ViSoBERT) | 🟡 Có kết quả nhưng **chưa converge** + **sai backbone** so với yêu cầu của thầy (xem mục 3), chưa commit vào repo |
-| Ablation domain **mobile / restaurant** (pair formulation) | ⬜ Chưa chạy |
-| Ablation với backbone **PhoBERT** (theo yêu cầu của thầy) | ⬜ Chưa chạy — đây là bộ số liệu chính cần có |
-| Đối chiếu siêu tham số với paper gốc | ⬜ Chưa làm — **việc cần làm đầu tiên** |
-| `colab_pair_ablation.ipynb` | ✅ Sẵn sàng chạy full (10 epoch, batch 64, fp16) |
+| `train_pair.py` (pair classification — formulation ĐÚNG) | ✅ Code xong, fp16 + kiến trúc PhoBERT+MHA đã verify (xem mục 6) |
+| Đối chiếu siêu tham số với paper gốc (F2) | 🟡 Đọc được preview (không full text) — **split 7:1:2 và backbone PhoBERT đã xác nhận**, còn 2 điểm chưa rõ (aux sentence, có tính `none`) — xem mục 6 |
+| Kiến trúc model (PhoBERT + multi-head attention) | ✅ **Đã verify khớp baseline paper** (mobile +2.45, restaurant -5.26, hotel -4.81) — CHỐT dùng cho mọi config từ nay |
+| Ablation domain **hotel** (4 config × 5 epoch, ViSoBERT, kiến trúc CŨ) | ⚠️ Không dùng để so sánh nữa — sai cả backbone lẫn kiến trúc so với chuẩn mới chốt hôm nay, cần chạy lại |
+| Ablation đầy đủ (4 config × 3 domain, PhoBERT+MHA, kiến trúc mới) | ⬜ **Chưa chạy được — hết quota Google Colab** (xem mục 6) |
+| `colab_pair_ablation.ipynb` / `colab_vitasd_baseline.ipynb` | ✅ Sẵn sàng chạy full (10 epoch, batch 64, fp16, tự `git pull` code mới nhất từ GitHub) |
 | Bảng 2 trong `report/paper_vi.md` | ⬜ Vẫn còn trống (`-` toàn bộ) |
 
 ---
@@ -169,7 +169,116 @@ Lý do phải làm trước: nếu sau này mới phát hiện split/LR/epoch kh
 ```bash
 cd "/Users/hunganh130502/Documents/Master's Degree IT- UIT/Kì 2/Xử lí ngôn ngữ tự nhiên/VITASA_Enhanced"
 rm -f .git/index.lock
-git add train_pair.py colab_pair_ablation.ipynb SESSION_SUMMARY_2026-08-10.md
-git commit -m "Add fp16 support to train_pair.py + session summary 2026-08-10"
+git add train_pair.py train_vitasd_baseline.py HYPERPARAMS.md \
+        colab_pair_ablation.ipynb colab_vitasd_baseline.ipynb \
+        SESSION_SUMMARY_2026-08-10.md
+git commit -m "Standardize on PhoBERT+MHA architecture (verified vs paper baseline)"
 git push
 ```
+
+---
+
+## 6. Cập nhật cuối ngày 10/8 — đã verify baseline, kiến trúc CHỐT xong
+
+### Đọc được preview paper (không có full text)
+Không lấy được PDF (ScienceDirect paywall, OpenReview chặn bot, GitHub
+`ViTASD` chỉ redirect về lại repo `ViTASA` — không có source code/checkpoint
+dù abstract nói là có). Nhưng đọc được phần preview công khai của paper +
+README repo, xác nhận thêm 2 điều:
+
+1. **Split 7:1:2 random** — đúng như code đang làm (README repo ghi rõ).
+2. **Kiến trúc ViTASD không phải chỉ `[CLS]`+linear** — paper có keyword
+   "Multi-head attention", lấy cảm hứng từ Zhang et al. (2020), thay embedding
+   BERT bằng PhoBERT. Đây là lý do quan trọng nhất khiến baseline trước đó
+   (chỉ đổi backbone, giữ nguyên `[CLS]`+linear) không đủ để so sánh công bằng.
+
+Vẫn CHƯA xác nhận: LR/batch/epoch cụ thể, cách xây auxiliary sentence, macro F1
+có tính lớp `none` không (2 câu hỏi treo từ 20/7).
+
+### Tạo `train_vitasd_baseline.py` — best-effort reproduction + verify
+Thêm kiến trúc PhoBERT + 1 lớp multi-head self-attention (residual+LayerNorm)
+trên sequence output, phân loại trên `[CLS]`. Chạy trên Colab (10 epoch, fp16,
+batch 32) cho cả 3 domain:
+
+| Domain | Macro F1 (loại none) | Baseline paper | Chênh lệch |
+|---|---|---|---|
+| Mobile | 64.22% | 61.77% | **+2.45** |
+| Restaurant | 35.86% | 41.12% | -5.26 |
+| Hotel | 47.83% | 52.64% | -4.81 |
+
+Chênh lệch dưới 6 điểm, mobile còn vượt baseline → **chấp nhận được, CHỐT dùng
+kiến trúc này**, không cần đợi full paper mới đi tiếp.
+
+⚠️ Đây là số liệu **best-effort reproduction thuần** (CE loss, không
+normalize) — dùng để verify kiến trúc/hyperparameter đúng hướng, KHÔNG phải
+kết quả ablation C1-C4 của đề tài.
+
+**Đã nhận `results.json` đầy đủ (kèm `epoch_logs`) cho cả 3 domain**, copy vào
+`experiments/results_vitasd_repro/` trong repo. Vài quan sát từ training curve
+(cần đưa vào report — đúng yêu cầu F3 của thầy, show cả quá trình chứ không
+chỉ số tốt nhất):
+
+- **Mobile**: curve tăng đều và ổn định, plateau quanh epoch 7-8 (66.37% →
+  66.36% → 65.12% → 66.09%) — model đã hội tụ, 10 epoch là đủ.
+- **Restaurant**: tăng chậm và có dao động nhẹ ở các epoch cuối (35.05% →
+  33.63% → 35.37% → 34.84%) — gần hội tụ nhưng chưa hoàn toàn ổn định.
+- **Hotel**: **dao động khá mạnh giữa các epoch** (53.49% epoch 6 → tụt còn
+  46.62% epoch 7 → nhảy lên 60.18% epoch 8 → 55.00% → 59.87%) — do sample
+  lớp `neutral` cực hiếm (~0.04%, 28 mẫu — xem `FORMULATION_FIX_2026-07-20.md`),
+  vài mẫu đúng/sai lệch cũng đủ làm macro F1 nhảy mạnh. Đây chính là lý do
+  Module 2 (Imbalanced Learning) cần thiết — dự kiến Focal Loss sẽ làm curve
+  ổn định hơn khi chạy ablation C3/C4.
+- Cơ chế lưu `best_model.pt` theo dev F1 cao nhất (không phải epoch cuối) nên
+  con số test cuối cùng dùng đúng checkpoint tốt nhất, không bị ảnh hưởng bởi
+  dao động này — nhưng khi vẽ chart cho report vẫn nên show đủ 10 epoch để
+  minh hoạ đúng thực tế train.
+
+Checkpoint `best_model.pt` (~273MB/domain, ~820MB tổng) **chưa copy vào repo**
+vì quá nặng cho git — chỉ giữ `results.json`. Nếu cần checkpoint cho demo/error
+analysis sau này, lấy lại từ file `.tar.gz` gốc.
+
+### Refactor `train_pair.py` — chốt kiến trúc dùng cho ablation
+- Thêm class `TASAPairModelMHA` (giống hệt bản vừa verify ở trên), đặt làm
+  **mặc định** cho mọi config C1-C4 (thay cho `TASAPairModel` cũ, chỉ
+  `[CLS]`+linear — giữ lại qua cờ `--plain-classifier` để đối chiếu khi cần).
+- Default `--model` đổi từ `visobert` → **`phobert`**.
+- `train_vitasd_baseline.py` giờ import `TASAPairModelMHA` thẳng từ
+  `train_pair.py`, không định nghĩa lặp lại — tránh 2 nơi lệch nhau.
+- **Hệ quả:** kết quả hotel/ViSoBERT 4-config chạy đầu tháng 8 (kiến trúc
+  `plain_classifier` cũ) không còn so trực tiếp được với ablation chạy từ nay
+  — cần chạy lại nếu muốn đưa vào bảng so sánh cuối.
+
+### Đổi cách đồng bộ code lên Colab: GitHub thay vì Google Drive
+Repo `Hunganh1305/VITASA_Enhanced` đang **public** → cả 2 notebook giờ có 1
+cell `git clone`/`git pull` thẳng từ GitHub, không cần mount Drive/kéo-thả file
+tay nữa. Workflow mới: sửa code → `git push` → Colab chạy lại đúng 1 cell để
+lấy bản mới nhất.
+
+### ⚠️ Hết quota Google Colab — chưa chạy được ablation đầy đủ
+Sau khi verify baseline xong, hết quota trước khi kịp chạy full ablation 4
+config × 3 domain (bước tiếp theo trong kế hoạch). **Đây là việc ưu tiên số 1
+khi quota reset** (Colab Free thường reset theo ngày/24h, hoặc cân nhắc Colab
+Pro nếu quota hết thường xuyên do khối lượng train nhiều domain × nhiều config).
+
+---
+
+## 7. Việc cần làm tiếp (cập nhật lại theo tiến độ tối 10/8)
+
+1. **Chờ quota Colab reset** → chạy `colab_pair_ablation.ipynb` full: 4 config
+   (CE / CE+norm / Focal / Focal+norm) × 3 domain (mobile/restaurant/hotel),
+   kiến trúc PhoBERT+MHA đã chốt, 10 epoch, fp16.
+2. ✅ ~~Gửi file `.tar.gz` kết quả baseline reproduction~~ — Đã nhận, đã copy
+   `results.json` (3 domain, đủ `epoch_logs`) vào
+   `experiments/results_vitasd_repro/` trong repo.
+3. Sau khi chạy xong bước 1, copy `results.json` của ablation C1-C4 vào đúng
+   vị trí trong repo (`experiments/results_pair/`), commit.
+4. Chạy `summarize_pair_results.py` → bảng ablation đầy đủ mọi config (F3).
+5. Vẽ training curve từ `epoch_logs` cho tất cả config (F3).
+6. Cân nhắc chạy lại 4 config hotel/ViSoBERT với kiến trúc mới (PhoBERT+MHA
+   → đổi `--model visobert`) để có dòng "+ ViSoBERT backbone" nhất quán.
+7. Điền Bảng 2 trong `report/paper_vi.md` + mục "quá trình thực nghiệm".
+8. Vẫn nên hỏi thầy Kiệt: auxiliary sentence xây thế nào, macro F1 có tính
+   `none` không, và xin source code/PDF đầy đủ nếu có thể — dù baseline đã
+   verify tạm ổn, có source code gốc vẫn tốt hơn nhiều so với "best-effort".
+9. Dọn file untracked (`.test_write`), xác nhận có giữ
+   `SESSION_SUMMARY_2026-07-11.md` không.

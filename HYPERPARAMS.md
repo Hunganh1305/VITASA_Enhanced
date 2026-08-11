@@ -99,6 +99,29 @@ Hai lựa chọn, chọn 1 rồi **giữ nguyên cho TẤT CẢ config**:
 
 ---
 
+## 3.5. ✅ Đã verify baseline (2026-08-10) — CHỐT dùng kiến trúc này
+
+Chạy `train_vitasd_baseline.py` trên Colab (PhoBERT, 10 epoch, fp16, batch 32):
+
+| Domain | Macro F1 (loại none) | Baseline paper | Chênh lệch |
+|---|---|---|---|
+| Mobile | 64.22% | 61.77% | **+2.45** |
+| Restaurant | 35.86% | 41.12% | -5.26 |
+| Hotel | 47.83% | 52.64% | -4.81 |
+
+Chênh lệch dưới 6 điểm cả 3 domain, mobile còn vượt baseline → **chấp nhận
+được, không cần chờ full paper nữa**. Đã cập nhật `train_pair.py`:
+- Mặc định `--model` đổi từ `visobert` → **`phobert`**.
+- Model mặc định đổi từ `[CLS]+linear` (`TASAPairModel`) sang **`TASAPairModelMHA`**
+  (PhoBERT/ViSoBERT + multi-head self-attention) — dùng cho **mọi config C1-C4**
+  từ nay để nhất quán với baseline vừa verify. Cờ `--plain-classifier` giữ lại
+  kiến trúc cũ nếu cần đối chiếu.
+- Kết quả hotel/ViSoBERT chạy trước 2026-08-10 dùng kiến trúc cũ
+  (`plain_classifier`) → **không so trực tiếp được** với ablation chạy từ nay,
+  cần chạy lại nếu muốn đưa vào bảng so sánh cuối cùng.
+
+---
+
 ## 4. File mới: `train_vitasd_baseline.py` — kiểm tra số liệu của tác giả
 
 Vì kiến trúc ViTASD **không chỉ là PhoBERT + linear classifier** (paper có

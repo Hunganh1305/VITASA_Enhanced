@@ -39,6 +39,21 @@ hyperparameter mà nằm ở chi tiết kiến trúc/auxiliary sentence/metric c
 → BẮT BUỘC phải xin paper đầy đủ hoặc source code từ thầy Kiệt, không đoán tiếp
 được nữa.
 
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ KẾT QUẢ ĐÃ CHẠY (2026-08-10, PhoBERT, 10 epoch, fp16, Colab T4)              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+    Domain      | Macro F1 (loại none) | Baseline paper | Chênh lệch
+    ------------|-----------------------|-----------------|-----------
+    Mobile      |        64.22%         |     61.77%      |   +2.45
+    Restaurant  |        35.86%         |     41.12%      |   -5.26
+    Hotel       |        47.83%         |     52.64%      |   -4.81
+
+Chênh lệch dưới 6 điểm trên cả 3 domain, mobile còn VƯỢT baseline → chấp nhận
+được. Đã CHỐT dùng kiến trúc `TASAPairModelMHA` (PhoBERT + multi-head
+attention, xem `train_pair.py`) làm kiến trúc chuẩn cho toàn bộ ablation C1-C4
+từ nay — không cần chờ full paper mới đi tiếp.
+
 Dùng lại toàn bộ hạ tầng data/eval của train_pair.py (đã verify logic split,
 gán nhãn, không leak) — chỉ thay model + bỏ 2 module đóng góp (Normalization,
 Imbalanced Learning) để đây là baseline THUẦN, không bị nhiễu bởi cải tiến của
@@ -67,7 +82,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
+from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
@@ -78,46 +93,12 @@ from train_pair import (
     MODEL_REGISTRY, MAX_LEN, SEED,
     extract_aspect_set, split_data, TASAPairDataset,
     SENTIMENTS, train_epoch, evaluate,
+    TASAPairModelMHA,  # dùng CHUNG với train_pair.py — không định nghĩa lại ở đây,
+                        # tránh 2 nơi lệch nhau sau khi đã verify kiến trúc này (2026-08-10)
     _HAS_UNDERTHESEA,
 )
 
 BASELINE_VITASD = {"mobile": 61.77, "restaurant": 41.12, "hotel": 52.64}
-
-
-# ── Model: PhoBERT + multi-head self-attention (best-effort) ───────────────────
-
-class TASAPairModelMHA(nn.Module):
-    """Best-effort reproduction của kiến trúc ViTASD: encoder (PhoBERT) + 1 lớp
-    multi-head self-attention trên toàn bộ sequence output + residual/LayerNorm,
-    rồi phân loại trên vector [CLS].
-
-    ⚠️ Đây KHÔNG chắc là kiến trúc chính xác trong Fig. 6 của paper — chỉ là
-    thiết kế phổ biến khớp với mô tả công khai ("PhoBERT embeddings" +
-    "Multi-head attention"). Nếu xin được source code gốc, thay class này.
-    """
-
-    def __init__(self, num_labels: int, model_name: str, num_heads: int = 8):
-        super().__init__()
-        self.bert = AutoModel.from_pretrained(model_name)
-        hidden = self.bert.config.hidden_size
-        self.mha = nn.MultiheadAttention(
-            embed_dim=hidden, num_heads=num_heads, batch_first=True, dropout=0.1
-        )
-        self.layernorm = nn.LayerNorm(hidden)
-        self.dropout = nn.Dropout(0.1)
-        self.classifier = nn.Linear(hidden, num_labels)
-
-    def forward(self, input_ids, attention_mask):
-        out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        seq = out.last_hidden_state  # [B, T, H]
-
-        # key_padding_mask: True = vị trí bị bỏ qua (padding)
-        key_padding_mask = attention_mask == 0
-        attn_out, _ = self.mha(seq, seq, seq, key_padding_mask=key_padding_mask)
-        seq = self.layernorm(seq + attn_out)  # residual, chuẩn transformer block
-
-        cls = seq[:, 0]  # [B, H] — vector [CLS] sau khi đã "nhìn" toàn câu qua MHA
-        return self.classifier(self.dropout(cls))
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

@@ -305,10 +305,16 @@ class TASAPairDataset(Dataset):
 # ── Model ─────────────────────────────────────────────────────────────────────
 
 class TASAPairModel(nn.Module):
-    """Encoder + classifier trên [CLS] — kiến trúc chuẩn của họ BERT-pair.
+    """[LEGACY — không còn dùng làm mặc định từ 2026-08-10]
+    Encoder + classifier trên [CLS], không có lớp attention thêm.
 
-    Khác train.py cũ (classifier chạy trên TỪNG token để gán BIO), ở đây chỉ
-    phân loại 1 lần cho cả cặp (câu, aspect), lấy biểu diễn [CLS] làm đại diện.
+    Đây là kiến trúc BERT-pair "trần" (như CG-BERT/BERT-pair-QA/NLI trong
+    paper dùng làm baseline SO SÁNH, không phải chính ViTASD). Dùng để chạy 4
+    config ablation hotel/ViSoBERT hồi đầu tháng 8 — các kết quả đó KHÔNG cùng
+    kiến trúc với `TASAPairModelMHA` bên dưới (đã verify sát baseline paper
+    hơn hẳn: mobile +2.45, restaurant -5.26, hotel -4.81 so với 61.77/41.12/
+    52.64%), nên không so trực tiếp được với ablation chạy từ nay về sau.
+    Giữ lại class này để tái chạy nếu cần đối chiếu 2 kiến trúc.
     """
 
     def __init__(self, num_labels: int, model_name: str):
@@ -321,6 +327,40 @@ class TASAPairModel(nn.Module):
         out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         cls = out.last_hidden_state[:, 0]  # [B, H] — vector tại vị trí [CLS]
         return self.classifier(self.dropout(cls))  # [B, C]
+
+
+class TASAPairModelMHA(nn.Module):
+    """[MẶC ĐỊNH từ 2026-08-10] Encoder + 1 lớp multi-head self-attention
+    (residual + LayerNorm) trên toàn bộ sequence output + classifier trên
+    [CLS] — best-effort reproduction của kiến trúc ViTASD (paper nhắc tới
+    "Multi-head attention", lấy cảm hứng từ Zhang et al. 2020).
+
+    Đã verify (2026-08-10, PhoBERT, 10 epoch, fp16) macro F1 gần baseline
+    paper trên cả 3 domain (mobile vượt +2.45, restaurant/hotel lệch dưới 6
+    điểm) — dùng làm kiến trúc chuẩn cho MỌI config ablation (C1-C4) từ nay,
+    để so sánh công bằng với baseline ViTASD. Xem `train_vitasd_baseline.py`
+    và `HYPERPARAMS.md` để biết chi tiết những gì đã xác nhận / còn giả định.
+    """
+
+    def __init__(self, num_labels: int, model_name: str, num_heads: int = 8):
+        super().__init__()
+        self.bert = AutoModel.from_pretrained(model_name)
+        hidden = self.bert.config.hidden_size
+        self.mha = nn.MultiheadAttention(
+            embed_dim=hidden, num_heads=num_heads, batch_first=True, dropout=0.1
+        )
+        self.layernorm = nn.LayerNorm(hidden)
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden, num_labels)
+
+    def forward(self, input_ids, attention_mask):
+        out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        seq = out.last_hidden_state  # [B, T, H]
+        key_padding_mask = attention_mask == 0  # True = vị trí padding, bỏ qua
+        attn_out, _ = self.mha(seq, seq, seq, key_padding_mask=key_padding_mask)
+        seq = self.layernorm(seq + attn_out)  # residual, chuẩn transformer block
+        cls = seq[:, 0]
+        return self.classifier(self.dropout(cls))
 
 
 # ── Loss factory ──────────────────────────────────────────────────────────────
@@ -433,7 +473,17 @@ def main():
     p.add_argument("--weight-strategy",
                    choices=["effective_number", "inverse_frequency", "pos_neg_ratio"],
                    default="effective_number")
-    p.add_argument("--model", choices=list(MODEL_REGISTRY.keys()), default="visobert")
+    p.add_argument("--model", choices=list(MODEL_REGISTRY.keys()), default="phobert",
+                   help="Mặc định PhoBERT (2026-08-10) — đúng backbone tác giả dùng, xác nhận từ "
+                        "paper. ViSoBERT giờ là 1 dòng ablation bổ sung, không phải mặc định.")
+    p.add_argument("--plain-classifier", action="store_true",
+                   help="Dùng kiến trúc CŨ (chỉ [CLS] + linear, không có multi-head attention). "
+                        "KHÔNG khuyến khích — chỉ dùng để đối chiếu lại với kết quả ViSoBERT hotel "
+                        "chạy trước 2026-08-10. Mặc định giờ là TASAPairModelMHA (đã verify sát "
+                        "baseline paper hơn).")
+    p.add_argument("--num-heads", type=int, default=8,
+                   help="Số head của lớp multi-head attention (chỉ có tác dụng khi KHÔNG bật "
+                        "--plain-classifier). Giá trị giả định — Fig. 6 của paper gốc bị khoá.")
     p.add_argument("--epochs", type=int, default=3,
                    help="Mặc định thấp hơn train.py cũ vì số sample/epoch lớn hơn 10-54 lần.")
     p.add_argument("--batch-size", type=int, default=BATCH_SIZE)
@@ -462,6 +512,7 @@ def main():
         f"{'_norm' if args.normalize else ''}"
         f"{'_keepexpr' if args.keep_expressive else ''}"
         f"_{args.model}"
+        f"{'_plain' if args.plain_classifier else '_mha'}"
         f"{'_noseg' if args.no_segment else ''}"
         f"{'' if args.weight_strategy == 'effective_number' else '_w-' + args.weight_strategy}"
     )
@@ -513,7 +564,10 @@ def main():
     test_loader = DataLoader(test_ds, batch_size=args.batch_size)
 
     loss_fn = build_loss_fn(args.loss, train_labels, len(SENTIMENTS), device, args.weight_strategy)
-    model = TASAPairModel(len(SENTIMENTS), model_name).to(device)
+    if args.plain_classifier:
+        model = TASAPairModel(len(SENTIMENTS), model_name).to(device)
+    else:
+        model = TASAPairModelMHA(len(SENTIMENTS), model_name, num_heads=args.num_heads).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
     total_steps = len(train_loader) * args.epochs
     scheduler = get_linear_schedule_with_warmup(optimizer, total_steps // 10, total_steps)
@@ -549,6 +603,8 @@ def main():
 
     summary = {
         "config": config_name, "formulation": "target-aspect pair classification",
+        "architecture": "plain_classifier" if args.plain_classifier else "phobert_mha",
+        "num_heads": None if args.plain_classifier else args.num_heads,
         "domain": args.domain, "model": args.model, "loss": args.loss,
         "normalize": args.normalize, "keep_expressive": args.keep_expressive,
         "weight_strategy": args.weight_strategy, "epochs": args.epochs,
