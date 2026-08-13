@@ -254,6 +254,19 @@ cell `git clone`/`git pull` thẳng từ GitHub, không cần mount Drive/kéo-t
 tay nữa. Workflow mới: sửa code → `git push` → Colab chạy lại đúng 1 cell để
 lấy bản mới nhất.
 
+### Phát hiện + fix thêm 2 lỗi trong `colab_pair_ablation.ipynb`
+
+1. **Cell STRATEGY 1 và STRATEGY 2 vẫn hardcode `--model visobert`** — sót lại
+   từ trước khi chốt dùng PhoBERT (mục 6 ở trên). Lần chạy STRATEGY 1 bị ngắt
+   giữa chừng (mobile+restaurant xong, hotel bị ngắt do hết quota) hoá ra dùng
+   sai backbone → bỏ luôn, không cần tải về. Đã sửa cả 2 cell sang `--model phobert`.
+2. **Không có cơ chế lưu/resume giữa chừng** — `results.json` chỉ ghi ở cuối
+   mỗi lần chạy `train_pair.py` (sau khi xong hết epoch + eval test), nên domain
+   nào bị ngắt là mất trắng, không resume được, dễ lãng phí quota đã dùng.
+   Đã thêm vào cả 2 cell: **(a)** skip domain/config đã có `results.json` (an
+   toàn khi chạy lại nhiều lần), **(b)** `files.download()` ngay sau mỗi
+   domain/config chạy xong — không đợi tới cuối mới tải (cell 9 cũ).
+
 ### ⚠️ Hết quota Google Colab — chưa chạy được ablation đầy đủ
 Sau khi verify baseline xong, hết quota trước khi kịp chạy full ablation 4
 config × 3 domain (bước tiếp theo trong kế hoạch). **Đây là việc ưu tiên số 1
