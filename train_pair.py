@@ -365,7 +365,8 @@ class TASAPairModelMHA(nn.Module):
 
 # ── Loss factory ──────────────────────────────────────────────────────────────
 
-def build_loss_fn(loss_type, train_labels, num_labels, device, weight_strategy="effective_number"):
+def build_loss_fn(loss_type, train_labels, num_labels, device,
+                  weight_strategy="effective_number", focal_gamma=2.0, focal_use_alpha=True):
     if loss_type == "ce":
         return nn.CrossEntropyLoss()
 
@@ -379,7 +380,12 @@ def build_loss_fn(loss_type, train_labels, num_labels, device, weight_strategy="
     if loss_type == "weighted_ce":
         return WeightedCrossEntropyLoss(class_weights=weights)
     if loss_type == "focal":
-        return FocalLoss(gamma=2.0, alpha=weights)
+        # focal_use_alpha=False → focal loss THUẦN, KHÔNG kèm class weighting.
+        # Dùng để test giả thuyết "focal + class-weight đang chồng lấn quá tay".
+        alpha = weights if focal_use_alpha else None
+        print(f"  Focal Loss: gamma={focal_gamma}, "
+              f"alpha={'class weights' if focal_use_alpha else 'None (focal thuần)'}")
+        return FocalLoss(gamma=focal_gamma, alpha=alpha)
     raise ValueError(f"Unknown loss: {loss_type!r}")
 
 
@@ -473,6 +479,13 @@ def main():
     p.add_argument("--weight-strategy",
                    choices=["effective_number", "inverse_frequency", "pos_neg_ratio"],
                    default="effective_number")
+    p.add_argument("--focal-gamma", type=float, default=2.0,
+                   help="Hệ số focusing của Focal Loss (chỉ dùng khi --loss focal). Mặc định 2.0. "
+                        "Càng cao càng dồn vào minority class nhưng dễ overcorrect → thử 1.0/0.5 "
+                        "nếu điểm dao động mạnh ở domain mất cân bằng nặng (restaurant/hotel).")
+    p.add_argument("--focal-no-alpha", action="store_true",
+                   help="Tắt class-weighting trong Focal Loss (dùng focal THUẦN). Test giả thuyết "
+                        "'focal + class-weight chồng lấn quá tay' — 2 cơ chế cùng đẩy về minority.")
     p.add_argument("--model", choices=list(MODEL_REGISTRY.keys()), default="phobert",
                    help="Mặc định PhoBERT (2026-08-10) — đúng backbone tác giả dùng, xác nhận từ "
                         "paper. ViSoBERT giờ là 1 dòng ablation bổ sung, không phải mặc định.")
@@ -507,10 +520,19 @@ def main():
         sys.exit("❌ --keep-expressive chỉ có tác dụng khi bật --normalize.")
 
     model_name = MODEL_REGISTRY[args.model]
+    # Suffix cho các thông số focal khác mặc định — để config mới KHÔNG ghi đè kết
+    # quả cũ (gamma=2.0 + có alpha) và để cơ chế resume-skip phân biệt đúng.
+    focal_suffix = ""
+    if args.loss == "focal":
+        if args.focal_gamma != 2.0:
+            focal_suffix += f"_g{args.focal_gamma:g}"
+        if args.focal_no_alpha:
+            focal_suffix += "_noalpha"
     config_name = (
         f"pair_{args.domain}_loss-{args.loss}"
         f"{'_norm' if args.normalize else ''}"
         f"{'_keepexpr' if args.keep_expressive else ''}"
+        f"{focal_suffix}"
         f"_{args.model}"
         f"{'_plain' if args.plain_classifier else '_mha'}"
         f"{'_noseg' if args.no_segment else ''}"
@@ -563,7 +585,8 @@ def main():
     dev_loader = DataLoader(dev_ds, batch_size=args.batch_size)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size)
 
-    loss_fn = build_loss_fn(args.loss, train_labels, len(SENTIMENTS), device, args.weight_strategy)
+    loss_fn = build_loss_fn(args.loss, train_labels, len(SENTIMENTS), device, args.weight_strategy,
+                            focal_gamma=args.focal_gamma, focal_use_alpha=not args.focal_no_alpha)
     if args.plain_classifier:
         model = TASAPairModel(len(SENTIMENTS), model_name).to(device)
     else:
@@ -608,6 +631,8 @@ def main():
         "domain": args.domain, "model": args.model, "loss": args.loss,
         "normalize": args.normalize, "keep_expressive": args.keep_expressive,
         "weight_strategy": args.weight_strategy, "epochs": args.epochs,
+        "focal_gamma": args.focal_gamma if args.loss == "focal" else None,
+        "focal_use_alpha": (not args.focal_no_alpha) if args.loss == "focal" else None,
         "n_aspects": len(aspects),
         "n_pairs": {"train": len(train_ds), "dev": len(dev_ds), "test": len(test_ds)},
         "best_dev_f1": best_dev_f1, "test": test_m,
