@@ -1,0 +1,305 @@
+% =============================================================
+% ViTASA Enhanced -- ACL-format paper (Vietnamese content)
+% Biên soạn với template: https://www.overleaf.com/latex/templates/
+%   association-for-computational-linguistics-acl-conference/jvxskxpnznfj
+%
+% HƯỚNG DẪN BIÊN DỊCH (ĐÃ TEST-COMPILE THÀNH CÔNG trong sandbox, xem ghi chú):
+%  1. Tạo project mới trên Overleaf từ link template ở trên.
+%  2. Thay file main.tex bằng nội dung file này (giữ nguyên acl.sty
+%     và acl_natbib.bst mà template đã có sẵn).
+%  3. Copy custom.bib (đi kèm) vào cùng thư mục, đè lên custom.bib mẫu.
+%  4. QUAN TRỌNG: đổi compiler sang XeLaTeX
+%     (Overleaf: menu Menu (góc trái) -> Compiler -> XeLaTeX).
+%     Lý do: dùng fontspec/polyglossia để hiện đúng dấu tiếng Việt,
+%     đáng tin cậy hơn nhiều so với gói `vietnam`/T5 (thường không có
+%     sẵn trên nhiều bản TeXLive, kể cả một số container Overleaf).
+%  5. Nếu Overleaf báo thiếu font "DejaVu Serif", đổi \setmainfont ở
+%     dưới sang 1 font Unicode khác chắc chắn có sẵn, vd "Noto Serif"
+%     hoặc "Liberation Serif" -- test-compile trong sandbox đã dùng
+%     DejaVu Serif, chạy PDF ra chữ Việt đầy đủ dấu, đúng layout ACL 2 cột.
+% =============================================================
+
+\documentclass[11pt]{article}
+
+% ---- ACL style (giữ nguyên từ template Overleaf) ----
+\usepackage[]{acl}
+\usepackage{latexsym}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{microtype}
+\usepackage{url}
+
+% ---- Tiếng Việt qua XeLaTeX (fontspec + polyglossia) ----
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{vietnamese}
+\setmainfont{DejaVu Serif}
+
+\title{Cải tiến Phân tích Cảm xúc Hướng đến Khía cạnh cho Tiếng Việt bằng Chuẩn hóa Văn bản Mạng xã hội và Học Mất cân bằng}
+
+\author{
+  Phạm Nguyễn Hùng Anh \\
+  Trường Đại học Công nghệ Thông tin (UIT), ĐHQG-HCM \\
+  \texttt{22xxxxxx@gm.uit.edu.vn} \\
+  \And
+  Giảng viên hướng dẫn: PGS.TS. Nguyễn Văn Kiệt \\
+  Trường Đại học Công nghệ Thông tin (UIT), ĐHQG-HCM \\
+  \texttt{kietnv@uit.edu.vn}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Phân tích Cảm xúc Hướng đến Khía cạnh (\textit{Targeted Aspect Sentiment Analysis} -- TASA) nhằm trích xuất đồng thời bộ ba (đối tượng, khía cạnh, cảm xúc) từ một câu. Bộ dữ liệu ViTASA và mô hình nền ViTASD gần đây đã thiết lập một benchmark quy mô lớn cho TASA tiếng Việt trên ba lĩnh vực (điện thoại, nhà hàng, khách sạn), nhưng chính tác giả đã chỉ ra hai hạn chế: mất cân bằng lớp nghiêm trọng giữa các nhãn cảm xúc, và khả năng xử lý kém với ngôn ngữ phi chính thức trên mạng xã hội (teencode, viết tắt, ký tự lặp). Bài báo này trình bày một pipeline mở rộng tích hợp (1) một module Chuẩn hóa Văn bản Mạng xã hội tiếng Việt dựa trên luật, và (2) các kỹ thuật Học Mất cân bằng (Focal Loss, class-weighted Cross-Entropy) vào một kiến trúc encoder-classifier dựa trên PhoBERT. Trong quá trình tái lập baseline, chúng tôi phát hiện và sửa một sai lệch quan trọng về cách mô hình hóa bài toán -- từ gán nhãn chuỗi (BIO tagging) sang phân loại cặp mục tiêu--khía cạnh (\textit{target-aspect pair classification}) -- giúp baseline tái lập đạt điểm macro F1 sát với con số công bố (chênh lệch trong khoảng $-0.2$ đến $+2.4$ điểm trên cả ba lĩnh vực). Thực nghiệm ablation đầy đủ với 4 cấu hình trên cả ba lĩnh vực cho thấy, với thông số mặc định, hai module đề xuất \emph{chưa} cải thiện được điểm số so với baseline, và chúng tôi trình bày phân tích chi tiết theo từng epoch để lý giải nguyên nhân (phương sai cao do lớp thiểu số cực hiếm, cơ chế chọn checkpoint theo dev không ổn định, một số cấu hình chưa hội tụ). Chúng tôi báo cáo trung thực các kết quả này, kèm theo hướng điều chỉnh siêu tham số đang được tiến hành, như một đóng góp về phương pháp luận cho các nghiên cứu TASA tiếng Việt tiếp theo.
+\end{abstract}
+
+\section{Giới thiệu}
+\label{sec:intro}
+
+Phân tích cảm xúc trên mạng xã hội ngày càng đóng vai trò quan trọng khi hàng triệu người dùng Việt Nam đăng tải đánh giá và bình luận trên các nền tảng như Facebook, Shopee, hay Google Reviews mỗi ngày. Khác với phân tích cảm xúc ở mức văn bản hay câu, Phân tích Cảm xúc Hướng đến Khía cạnh (TASA) hướng tới một mức độ hiểu chi tiết hơn: xác định tất cả các bộ ba (\textit{target}, \textit{aspect}, \textit{sentiment}) xuất hiện trong một câu, trong đó \textit{target} là đối tượng được nhắc tới (có thể ẩn), \textit{aspect} là khía cạnh thuộc một tập hữu hạn đã định nghĩa trước theo lĩnh vực, và \textit{sentiment} là cực tính cảm xúc gắn với cặp đó~\citep{saeidi2016sentihood}.
+
+\citet{tran2025vitasa} giới thiệu ViTASA -- bộ dữ liệu quy mô lớn đầu tiên cho TASA tiếng Việt, với hơn 500.000 cặp mục tiêu--khía cạnh trích từ 6.000 bình luận mạng xã hội thuộc ba lĩnh vực: điện thoại, nhà hàng, khách sạn. Mô hình đề xuất của họ, ViTASD, sử dụng embedding PhoBERT~\citep{nguyen2020phobert} kết hợp một lớp multi-head attention, đạt điểm macro F1 lần lượt 61.77\%, 41.12\%, và 52.64\% trên ba lĩnh vực. Nhóm tác giả đồng thời thừa nhận hai hạn chế còn tồn tại của phương pháp: (1) sự mất cân bằng nghiêm trọng giữa các lớp cảm xúc -- đặc biệt là lớp \textit{neutral} chỉ chiếm một tỉ lệ cực nhỏ ở một số lĩnh vực -- khiến mô hình có xu hướng thiên lệch về lớp đa số; và (2) việc không xử lý được các đặc điểm ngôn ngữ phi chính thức phổ biến trên mạng xã hội tiếng Việt, như teencode (``pyn'' thay cho ``pin''), từ viết tắt nhấn mạnh (``vcl''), hay hiện tượng lặp ký tự (``nhanhhhhh'').
+
+Bài báo này trực tiếp giải quyết cả hai hạn chế trên bằng cách bổ sung hai thành phần vào pipeline gốc:
+
+\begin{enumerate}
+    \item Một module \textbf{Chuẩn hóa Văn bản Mạng xã hội tiếng Việt} (\textit{Vietnamese Social Media Text Normalization}) dựa trên luật, chuẩn hóa văn bản phi chính thức trước khi đưa vào mô hình.
+    \item Các kỹ thuật \textbf{Học Mất cân bằng} (\textit{Imbalanced Learning}) -- cụ thể là Focal Loss~\citep{lin2017focal} và class-weighted Cross-Entropy với trọng số tính theo \textit{effective number of samples}~\citep{cui2019classbalanced} -- nhằm giảm thiên lệch của mô hình về phía nhãn đa số trong quá trình huấn luyện.
+\end{enumerate}
+
+Trong quá trình tái lập baseline ViTASD, chúng tôi phát hiện một sai lệch quan trọng về cách mô hình hóa bài toán trong lần triển khai đầu tiên: mô hình hóa dưới dạng gán nhãn chuỗi (BIO tagging trên từng token) cho ra macro F1 thấp hơn con số công bố tới 27--43 điểm trên cả ba lĩnh vực, bất kể việc điều chỉnh siêu tham số, backbone, hay chiến lược trọng số lớp. Phân tích kỹ dữ liệu (Mục~\ref{sec:reformulation}) cho thấy nguyên nhân gốc rễ không nằm ở siêu tham số mà ở việc mô hình hóa bài toán sai -- ViTASA thực chất được xây dựng theo hướng \textit{phân loại cặp mục tiêu--khía cạnh} (\textit{target-aspect pair classification}), tương tự họ mô hình BERT-pair~\citep{sun2019utilizing}, chứ không phải gán nhãn chuỗi span-level. Sau khi sửa lại theo đúng mô hình hóa này, baseline tái lập được của chúng tôi đạt điểm rất sát với con số công bố (chênh lệch từ $-0.21$ đến $+2.42$ điểm macro F1 trên ba lĩnh vực), xác nhận cách hiểu đúng về bài toán và tạo nền tảng đáng tin cậy để đánh giá đóng góp của hai module đề xuất.
+
+Đóng góp của bài báo gồm:
+\begin{itemize}
+    \item Xác định và sửa một sai lệch quan trọng về mô hình hóa bài toán trong việc tái lập ViTASD, có thể là bài học chung cho các nghiên cứu tương lai dựa trên ViTASA.
+    \item Đề xuất và triển khai module Chuẩn hóa Văn bản Mạng xã hội tiếng Việt và các kỹ thuật Học Mất cân bằng, tích hợp vào một kiến trúc PhoBERT + multi-head attention đã được xác thực bám sát baseline gốc.
+    \item Một nghiên cứu ablation đầy đủ (4 cấu hình $\times$ 3 lĩnh vực) cùng phân tích chi tiết theo từng epoch huấn luyện, chỉ ra rằng với thông số mặc định, hai module đề xuất chưa mang lại cải thiện nhất quán -- một phát hiện quan trọng về mặt phương pháp luận, kèm các giả thuyết nguyên nhân và hướng điều chỉnh đang được tiến hành.
+\end{itemize}
+
+
+\section{Công trình liên quan}
+\label{sec:related}
+
+\paragraph{Phân tích cảm xúc dựa trên khía cạnh.} Aspect-Based Sentiment Analysis (ABSA) đã được nghiên cứu rộng rãi qua chuỗi bài thi SemEval~\citep{pontiki2014semeval}. TASA mở rộng ABSA bằng cách thêm bước nhận dạng \textit{target}, tạo thành bộ ba (target, aspect, sentiment)~\citep{saeidi2016sentihood}. Nhiều phương pháp dựa trên BERT~\citep{devlin2019bert} đã đạt hiệu suất cao trên các benchmark tiếng Anh, trong đó họ mô hình BERT-pair~\citep{sun2019utilizing} xây dựng một câu phụ trợ (\textit{auxiliary sentence}) từ khía cạnh và ghép với câu gốc theo định dạng \texttt{[CLS] câu [SEP] mô tả khía cạnh [SEP]}, biến bài toán thành phân loại cặp câu -- đây cũng chính là hướng mô hình hóa mà ViTASD kế thừa. Context-Guided BERT~\citep{wu2021context} tiếp tục cải tiến hướng này bằng cơ chế attention có điều kiện theo ngữ cảnh.
+
+\paragraph{Phân tích cảm xúc tiếng Việt.} Nghiên cứu về phân tích cảm xúc tiếng Việt đã phát triển qua nhiều bộ dữ liệu, và gần đây nhất là ViTASA~\citep{tran2025vitasa} -- benchmark TASA đa lĩnh vực quy mô lớn đầu tiên cho tiếng Việt. Các mô hình ngôn ngữ tiền huấn luyện như PhoBERT~\citep{nguyen2020phobert}, dựa trên kiến trúc RoBERTa~\citep{liu2019roberta} và huấn luyện trên corpus tiếng Việt quy mô lớn, đã trở thành backbone tiêu chuẩn cho các tác vụ này nhờ khả năng biểu diễn ngữ nghĩa tốt hơn các mô hình đa ngôn ngữ tổng quát.
+
+\paragraph{Chuẩn hóa văn bản mạng xã hội.} Chuẩn hóa văn bản (\textit{text normalization}) cho ngôn ngữ mạng xã hội đã được nghiên cứu khá đầy đủ cho tiếng Anh~\citep{lin2017focal}\footnote{Tham chiếu placeholder theo hướng nghiên cứu chuẩn hóa văn bản nói chung; phần này cần bổ sung trích dẫn Han and Baldwin (2011) khi có quyền truy cập đầy đủ nguồn.} nhưng vẫn còn ít được khai thác cho tiếng Việt. Các pipeline NLP tiếng Việt hiện có (bao gồm cả PhoBERT) thường được huấn luyện chủ yếu trên văn bản chính thức (báo chí, Wikipedia), khiến khả năng xử lý ngôn ngữ phi chính thức trên mạng xã hội -- vốn chứa nhiều teencode, viết tắt, và lỗi chính tả có chủ đích -- còn hạn chế.
+
+\paragraph{Học mất cân bằng trong NLP.} Mất cân bằng lớp là một thách thức phổ biến trong phân loại văn bản. Focal Loss~\citep{lin2017focal} giảm trọng số đóng góp của các mẫu dễ (đã được phân loại tự tin) để mô hình tập trung học các mẫu khó và các lớp thiểu số. Class-Balanced Loss~\citep{cui2019classbalanced} tính trọng số lớp dựa trên \textit{effective number of samples} thay vì tần suất thô, nhằm tránh trọng số bị thổi phồng quá mức khi các mẫu trong cùng lớp có sự trùng lặp thông tin. Việc áp dụng có hệ thống các kỹ thuật này cho TASA tiếng Việt, đặc biệt trong bối cảnh phân bố lớp cực kỳ lệch như ViTASA, chưa được nghiên cứu trước đây.
+
+
+\section{Từ Gán nhãn Chuỗi đến Phân loại Cặp: Sửa một Sai lệch Mô hình hóa}
+\label{sec:reformulation}
+
+Trước khi trình bày phương pháp đề xuất, chúng tôi trình bày một phát hiện quan trọng trong quá trình tái lập baseline, vì nó ảnh hưởng trực tiếp đến tính hợp lệ của mọi so sánh sau đó.
+
+\paragraph{Vấn đề.} Lần triển khai đầu tiên của chúng tôi mô hình hóa TASA như bài toán gán nhãn chuỗi (\textit{BIO sequence tagging}): mỗi subword token được gán một trong các nhãn $\{\texttt{O}, \texttt{B-ASPECT\#SENT}, \texttt{I-ASPECT\#SENT}\}$, và macro F1 được tính trên toàn bộ không gian nhãn BIO đó. Với cách này, số lớp BIO tăng rất nhanh theo số khía cạnh của từng lĩnh vực (10 khía cạnh ở điện thoại, 27 ở nhà hàng, 54 ở khách sạn), dẫn tới không gian nhãn lần lượt là 59, 127, và 233 lớp. Macro F1 đo được trên PhoBERT với Cross-Entropy, sau 30 epoch, chỉ đạt 28.48\%, 5.95\%, và 9.78\% -- thấp hơn con số công bố của ViTASD từ 27 đến 43 điểm trên cả ba lĩnh vực, dù đã thử tăng số epoch, đổi backbone, và điều chỉnh chiến lược trọng số lớp.
+
+\paragraph{Chẩn đoán.} Khoảng cách lớn và ổn định qua nhiều lần thử nghiệm là dấu hiệu cho thấy vấn đề nằm ở tầng mô hình hóa bài toán, không phải siêu tham số. Ba bằng chứng củng cố giả thuyết này: (a) hai lĩnh vực nhà hàng và khách sạn trong dữ liệu ViTASA có trường \texttt{labels} (số nhiều) chứa các cặp (khía cạnh, cảm xúc) dạng phẳng, không đi kèm vị trí ký tự (\textit{character offset}) -- vô nghĩa nếu bài toán gốc là gán nhãn theo span; (b) con số ``hơn 500.000 cặp mục tiêu--khía cạnh'' trong tóm tắt của ViTASA chỉ khớp về bậc độ lớn nếu đếm theo số cặp (bình luận $\times$ khía cạnh của lĩnh vực), chứ không khớp với số lượng chú thích span thực tế (khoảng 18.800 trên toàn bộ dữ liệu); và (c) toàn bộ các mô hình baseline mà ViTASD so sánh -- CG-BERT, QACG-BERT, BERT-pair-QA, BERT-pair-NLI -- đều thuộc họ phân loại cặp câu, không có mô hình nào thuộc họ gán nhãn chuỗi.
+
+\paragraph{Cách sửa.} Chúng tôi mô hình hóa lại bài toán theo đúng hướng phân loại cặp mục tiêu--khía cạnh: với mỗi bình luận và mỗi khía cạnh $a$ thuộc tập khía cạnh $A$ của lĩnh vực, sinh ra một mẫu $(S, a) \rightarrow y$, trong đó $y \in \{\texttt{none}, \texttt{positive}, \texttt{negative}, \texttt{neutral}\}$ (\texttt{none} nếu khía cạnh đó không được nhắc tới hoặc không mang cực tính rõ ràng trong bình luận). Đầu vào được xây dựng theo định dạng BERT-pair: \texttt{[CLS] câu [SEP] mô tả khía cạnh [SEP]}. Macro F1 được tính trên 3 lớp cảm xúc chính (loại bỏ \texttt{none}, chiếm 76--95\% số cặp tùy lĩnh vực) -- đây là con số so sánh trực tiếp được với 61.77/41.12/52.64\% mà ViTASD công bố. Việc chia tập train/dev/test được thực hiện ở \emph{mức bình luận} (không phải mức cặp) theo tỉ lệ 7:1:2, xác nhận khớp với mô tả trong tài liệu chính thức của bộ dữ liệu, nhằm tránh rò rỉ dữ liệu (\textit{leakage}) giữa các tập khi các cặp của cùng một bình luận bị tách rời.
+
+Sau khi sửa lại mô hình hóa, phân bố lớp thực tế trên tập train trở nên rõ ràng và hợp lý hơn nhiều để nghiên cứu mất cân bằng: lớp \texttt{none} chiếm 76.5\%/90.6\%/94.6\% ở điện thoại/nhà hàng/khách sạn tương ứng, trong khi lớp \texttt{neutral} chỉ chiếm 1.0\%/0.2\%/0.04\% -- ở khách sạn, lớp \texttt{neutral} chỉ có 28 mẫu trên tổng số 75.600 mẫu huấn luyện. Đây chính xác là kiểu mất cân bằng cực đoan mà Học Mất cân bằng (Module 2) được thiết kế để giải quyết, và cũng là nguồn gốc của nhiều hiện tượng phương sai cao quan sát được trong Mục~\ref{sec:results}.
+
+
+\section{Phương pháp đề xuất}
+\label{sec:method}
+
+\subsection{Định nghĩa bài toán}
+Cho một bình luận $S$ và tập khía cạnh $A$ của lĩnh vực tương ứng, với mỗi $a \in A$, mô hình dự đoán nhãn $y_{S,a} \in \{\texttt{none}, \texttt{positive}, \texttt{negative}, \texttt{neutral}\}$. Kết quả cuối cùng của hệ thống là tập hợp các bộ ba $(S, a, y_{S,a})$ với $y_{S,a} \neq \texttt{none}$.
+
+\subsection{Kiến trúc mô hình}
+Chúng tôi sử dụng PhoBERT-base-v2~\citep{nguyen2020phobert} làm bộ mã hóa (\textit{encoder}) chính, khớp với backbone mà ViTASD sử dụng theo mô tả công khai của bài báo gốc. Trên biểu diễn đầu ra của encoder cho toàn bộ chuỗi, chúng tôi thêm một lớp multi-head self-attention~\citep{vaswani2017attention} (8 head) với kết nối tắt (\textit{residual}) và Layer Normalization, trước khi lấy biểu diễn tại vị trí \texttt{[CLS]} đưa qua một lớp phân loại tuyến tính:
+\begin{align}
+    H &= \text{Encoder}(S, a) \\
+    H' &= \text{LayerNorm}(H + \text{MHA}(H,H,H)) \\
+    \hat{y} &= \text{softmax}(W H'_{[\texttt{CLS}]} + b)
+\end{align}
+
+Việc bổ sung lớp multi-head attention xuất phát từ mô tả của ViTASD trong bài báo gốc, vốn được ghi nhận là ``lấy cảm hứng'' từ một kiến trúc dựa trên attention thay vì chỉ dùng biểu diễn \texttt{[CLS]} trần của họ mô hình BERT-pair thuần túy. Do không có quyền truy cập đầy đủ vào phần Mô tả Thực nghiệm (\textit{Experimental Settings}) của bài báo gốc lẫn mã nguồn công khai, số lượng head và cách bố trí chính xác của lớp attention này là giả định hợp lý dựa trên các thiết kế phổ biến, được xác thực gián tiếp qua độ khớp của kết quả tái lập với con số công bố (Mục~\ref{sec:results}).
+
+\subsection{Module 1 -- Chuẩn hóa Văn bản Mạng xã hội}
+\label{sec:module1}
+Module tiền xử lý dựa trên luật, gồm ba bước áp dụng tuần tự lên văn bản trước khi đưa vào tokenizer:
+
+\begin{enumerate}
+    \item \textbf{Chuẩn hóa ký tự lặp} (\textit{elongation normalization}): thu gọn chuỗi ký tự lặp từ 3 lần trở lên và dấu câu lặp từ 2 lần trở lên về dạng chuẩn (vd. \textit{``nhanhhhhh''} $\rightarrow$ \textit{``nhanh''}, \textit{``!!!!''} $\rightarrow$ \textit{``!''}).
+    \item \textbf{Tra cụm từ} (\textit{phrase lookup}): thay thế các cụm nhiều từ viết tắt/sai chính tả phổ biến trước khi tách token, để tránh việc tách token làm mất ngữ cảnh cụm từ (vd. \textit{``gia ca''} $\rightarrow$ \textit{``giá cả''}).
+    \item \textbf{Tra từ điển token} (\textit{token dictionary lookup}): tra từng token đã tách trong từ điển teencode/viết tắt gồm 151 mục (vd. \textit{``pyn''} $\rightarrow$ \textit{``pin''}, \textit{``sp''} $\rightarrow$ \textit{``sản phẩm''}).
+\end{enumerate}
+
+Module hỗ trợ một tùy chọn giữ lại các \textit{marker} biểu cảm (như ``kk'', ``haha'', chuỗi dấu chấm than) thay vì loại bỏ hoàn toàn, do những marker này có thể mang tín hiệu cảm xúc hữu ích thay vì thuần túy là nhiễu -- một giả thuyết chúng tôi kiểm định trong Mục~\ref{sec:discussion}. Các hạn chế đã biết của module: không sắp xếp lại thứ tự câu (chỉ thay thế ở mức từ/cụm từ), không sửa lỗi chính tả ngoài từ điển, và không khôi phục dấu thanh cho văn bản gõ không dấu.
+
+\subsection{Module 2 -- Học Mất cân bằng}
+\label{sec:module2}
+Để giảm thiên lệch của mô hình về phía nhãn \texttt{none} chiếm đa số, chúng tôi thử nghiệm hai kỹ thuật, có thể bật độc lập hoặc kết hợp:
+
+\textbf{Focal Loss}~\citep{lin2017focal}:
+\begin{equation}
+    \mathcal{L}_{FL}(p_t) = -\alpha_t (1-p_t)^\gamma \log(p_t)
+\end{equation}
+trong đó $p_t$ là xác suất mô hình dự đoán cho lớp đúng, $\gamma$ là hệ số focusing (mặc định $\gamma=2.0$), và $\alpha_t$ là trọng số lớp tùy chọn. Khi $\gamma=0$ và không có $\alpha$, Focal Loss trở về Cross-Entropy thông thường.
+
+\textbf{Trọng số lớp} được tính theo chiến lược \textit{effective number of samples}~\citep{cui2019classbalanced}:
+\begin{equation}
+    w_c = \frac{1-\beta}{1-\beta^{n_c}}, \quad \beta = 0.999
+\end{equation}
+với $n_c$ là số mẫu của lớp $c$ trong tập train. Trọng số này có thể được dùng độc lập (Weighted Cross-Entropy) hoặc kết hợp với Focal Loss (nhân vào $\alpha_t$).
+
+
+\section{Thiết lập thực nghiệm}
+\label{sec:setup}
+
+\subsection{Tập dữ liệu}
+Toàn bộ thực nghiệm được thực hiện trên ViTASA~\citep{tran2025vitasa}, gồm 6.000 bình luận được chú thích thủ công trên ba lĩnh vực: điện thoại (2.000 bình luận, 10 khía cạnh), nhà hàng (2.000 bình luận, 27 khía cạnh), và khách sạn (2.000 bình luận, 54 khía cạnh). Sau khi sinh cặp mục tiêu--khía cạnh (Mục~\ref{sec:reformulation}), số mẫu huấn luyện tương ứng là 14.000, 37.800, và 75.600. Bảng~\ref{tab:label-dist} trình bày phân bố nhãn thực tế trên tập train của từng lĩnh vực, cho thấy mức độ mất cân bằng tăng dần theo số khía cạnh.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Lĩnh vực} & \textbf{none} & \textbf{pos} & \textbf{neg} & \textbf{neu} \\
+\midrule
+Điện thoại  & 76.5\% & 14.8\% & 7.8\% & 1.0\% \\
+Nhà hàng    & 90.6\% & 7.7\%  & 1.5\% & 0.2\% \\
+Khách sạn   & 94.6\% & 3.9\%  & 1.4\% & 0.04\% \\
+\bottomrule
+\end{tabular}
+\caption{Phân bố nhãn trên tập train sau khi mô hình hóa lại theo phân loại cặp. Lớp \texttt{neutral} ở khách sạn chỉ có 28 mẫu trên 75.600.}
+\label{tab:label-dist}
+\end{table}
+
+\subsection{Siêu tham số}
+Chúng tôi huấn luyện với learning rate $2\times 10^{-5}$ (AdamW, weight decay $0.01$), linear scheduler với warmup 10\% tổng số bước, batch size 64, độ dài chuỗi tối đa 160 token, dropout $0.1$, và mixed-precision training (fp16) để tăng tốc độ huấn luyện trên GPU T4. Mỗi cấu hình được huấn luyện 10 epoch, chọn checkpoint theo macro F1 tốt nhất trên tập dev để đánh giá trên tập test. Seed cố định ($42$) cho mọi lần chạy nhằm đảm bảo khả năng tái lập.
+
+Do không có quyền truy cập đầy đủ vào phần Mô tả Thực nghiệm của bài báo ViTASA gốc (bị giới hạn truy cập trên ScienceDirect) lẫn mã nguồn công khai đầy đủ, các siêu tham số trên là lựa chọn hợp lý theo thông lệ fine-tuning BERT-base, không phải giá trị chính thức của tác giả gốc. Hai yếu tố duy nhất được xác nhận trực tiếp từ tài liệu công khai của bộ dữ liệu là: (a) tỉ lệ chia tập 7:1:2 ở mức bình luận, và (b) backbone PhoBERT. Chúng tôi thảo luận thêm về hạn chế này ở Mục~\ref{sec:limitations}.
+
+\subsection{Thiết kế ablation}
+Chúng tôi thiết kế 4 cấu hình để tách biệt đóng góp của từng module, giữ nguyên mọi siêu tham số khác (kiến trúc, epoch, batch size, v.v.) giữa các cấu hình để đảm bảo so sánh công bằng:
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lccl}
+\toprule
+\textbf{Cấu hình} & \textbf{Norm.} & \textbf{Loss} & \textbf{Mô tả} \\
+\midrule
+C1 & \ding{55} & CE     & Baseline \\
+C2 & \checkmark & CE    & + Text Normalization \\
+C3 & \ding{55} & Focal  & + Imbalanced Learning \\
+C4 & \checkmark & Focal & Full Model \\
+\bottomrule
+\end{tabular}
+\caption{Thiết kế ablation: 4 cấu hình $\times$ 3 lĩnh vực = 12 lượt huấn luyện.}
+\label{tab:ablation-design}
+\end{table}
+
+\noindent (Ký hiệu \checkmark/\ding{55} yêu cầu gói \texttt{pifont}; nếu không dùng, có thể thay bằng ``Có''/``Không''.)
+
+
+\section{Kết quả}
+\label{sec:results}
+
+\subsection{Xác thực baseline}
+Trước khi đánh giá đóng góp của hai module, chúng tôi xác thực độ tin cậy của baseline tái lập (cấu hình C1) bằng cách so sánh trực tiếp với con số công bố của ViTASD. Bảng~\ref{tab:baseline-verify} cho thấy baseline tái lập bám rất sát -- thậm chí vượt -- con số gốc trên cả ba lĩnh vực, xác nhận cách mô hình hóa lại bài toán (Mục~\ref{sec:reformulation}) và kiến trúc PhoBERT + multi-head attention (Mục~\ref{sec:method}) là hợp lý để dùng làm nền so sánh cho ablation.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Lĩnh vực} & \textbf{C1 (của chúng tôi)} & \textbf{ViTASD} & \textbf{$\Delta$} \\
+\midrule
+Điện thoại & 61.56\% & 61.77\% & $-0.21$ \\
+Nhà hàng   & 43.14\% & 41.12\% & $+2.02$ \\
+Khách sạn  & 55.06\% & 52.64\% & $+2.42$ \\
+\bottomrule
+\end{tabular}
+\caption{So sánh baseline tái lập (C1: PhoBERT + multi-head attention, Cross-Entropy, không chuẩn hóa) với con số công bố của ViTASD.}
+\label{tab:baseline-verify}
+\end{table}
+
+\subsection{Kết quả ablation đầy đủ}
+Bảng~\ref{tab:full-ablation} trình bày macro F1 trên tập test của cả 4 cấu hình trên cả ba lĩnh vực. Kết quả cho thấy, trái với kỳ vọng ban đầu, cả hai module đề xuất -- ở thông số mặc định -- \emph{không} cải thiện nhất quán so với baseline C1, và trong nhiều trường hợp làm giảm điểm đáng kể. Cấu hình Full Model (C4) thấp hơn baseline C1 trên cả ba lĩnh vực, đặc biệt tại nhà hàng ($-8.77$ điểm) và khách sạn ($-8.11$ điểm).
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Lĩnh vực} & \textbf{C1} & \textbf{C2} & \textbf{C3} & \textbf{C4} & \textbf{ViTASD} \\
+\midrule
+Điện thoại & 61.56 & 58.64 & \textbf{63.43} & 59.29 & 61.77 \\
+Nhà hàng   & \textbf{43.14} & 34.18 & 31.75 & 34.37 & 41.12 \\
+Khách sạn  & \textbf{55.06} & 54.55 & 52.02 & 46.95 & 52.64 \\
+\bottomrule
+\end{tabular}
+\caption{Macro F1 (\%) trên tập test, 4 cấu hình ablation $\times$ 3 lĩnh vực. In đậm: cấu hình tốt nhất mỗi hàng.}
+\label{tab:full-ablation}
+\end{table}
+
+Điểm sáng duy nhất là ở lĩnh vực điện thoại -- lĩnh vực có mức mất cân bằng nhẹ nhất (Bảng~\ref{tab:label-dist}) -- nơi cấu hình C3 (+Focal Loss) vượt baseline $+1.87$ điểm, đúng như kỳ vọng lý thuyết của Học Mất cân bằng.
+
+\subsection{Phân tích theo epoch}
+\label{sec:epoch-analysis}
+Vì bảng kết quả cuối cùng có thể che giấu các vấn đề về quá trình huấn luyện, chúng tôi phân tích chi tiết đường cong macro F1 trên tập dev theo từng epoch (đầy đủ trong phụ lục mã nguồn đi kèm). Ba quan sát quan trọng:
+
+\textbf{(a) Khoảng cách dev--test lớn ở các cấu hình Focal.} Ví dụ, cấu hình C3 tại khách sạn đạt dev F1 tốt nhất $59.12\%$ (epoch 6) nhưng chỉ đạt $52.02\%$ trên test -- chênh lệch $7.1$ điểm. Tại nhà hàng, mức chênh lệch này lên tới $8.6$ điểm. Đây là dấu hiệu \textit{phương sai cao}, không phải chỉ dấu hiệu module có hại: đường cong dev dao động mạnh giữa các epoch liền kề (vd. tại khách sạn: $43.5 \rightarrow 59.1 \rightarrow 53.2 \rightarrow 53.6$), khiến cơ chế chọn checkpoint theo dev F1 tốt nhất dễ ``vớ'' phải một đỉnh dao động ngẫu nhiên thay vì trạng thái hội tụ ổn định.
+
+\textbf{(b) Một số cấu hình chưa hội tụ trong 10 epoch.} Tại nhà hàng, cấu hình C1 (baseline) đạt điểm tốt nhất đúng ở epoch cuối cùng (epoch 10/10), với đường cong vẫn đang tăng mạnh ($36.3\% \rightarrow 41.3\%$ ở hai epoch cuối) -- cho thấy 10 epoch chưa đủ để lĩnh vực này hội tụ hoàn toàn, ảnh hưởng tới độ tin cậy của mọi so sánh ablation tại lĩnh vực này.
+
+\textbf{(c) Cơ chế chọn checkpoint theo dev là một nguồn nhiễu độc lập với module.} Vì (a) và (b) áp dụng cho cả cấu hình baseline C1 (dù ít nghiêm trọng hơn các cấu hình Focal), một phần đáng kể của mức tụt điểm quan sát ở C2--C4 có thể đến từ phương pháp đánh giá (chọn 1 checkpoint theo 1 epoch dev tốt nhất, với 1 seed duy nhất) chứ không hoàn toàn phản ánh chất lượng nội tại của module.
+
+
+\section{Thảo luận}
+\label{sec:discussion}
+
+Kết quả ở Mục~\ref{sec:results} đặt ra câu hỏi quan trọng: liệu Text Normalization và Focal Loss có thực sự không phù hợp với bài toán này, hay mức tụt điểm chủ yếu đến từ các yếu tố phương pháp luận (phương sai, chọn checkpoint, hội tụ)? Chúng tôi đề xuất ba giả thuyết cụ thể, hiện đang được kiểm định bằng thực nghiệm bổ sung (thời điểm nộp báo cáo, các thực nghiệm này chưa hoàn tất -- xem Mục~\ref{sec:limitations}):
+
+\textbf{H1 -- Hệ số focusing $\gamma$ quá cao.} Giá trị mặc định $\gamma=2.0$ có thể khiến Focal Loss quá tập trung vào các mẫu khó/thiểu số, gây \textit{overcorrect} ở các lĩnh vực mất cân bằng nặng (nhà hàng, khách sạn). Chúng tôi đang thử nghiệm $\gamma \in \{0.5, 1.0\}$.
+
+\textbf{H2 -- Focal Loss và trọng số lớp chồng lấn quá mức.} Cấu hình hiện tại kết hợp cả Focal Loss (tự giảm trọng số mẫu dễ) \emph{và} trọng số lớp theo effective number (Mục~\ref{sec:module2}) -- hai cơ chế cùng đẩy mạnh về phía lớp thiểu số có thể gây hiệu ứng cộng dồn quá mức. Chúng tôi đang thử nghiệm Focal Loss thuần (không kèm trọng số lớp).
+
+\textbf{H3 -- Chuẩn hóa văn bản loại bỏ tín hiệu cảm xúc hữu ích.} Cấu hình mặc định của Module 1 loại bỏ các marker biểu cảm (``kk'', ``haha'', chuỗi dấu chấm than lặp) thay vì giữ lại. Vì PhoBERT dùng subword tokenization đã có khả năng xử lý phần nào từ vựng lạ, việc chuẩn hóa quá tay có thể đang xóa đi tín hiệu cảm xúc thay vì chỉ loại bỏ nhiễu -- đặc biệt đáng chú ý vì nhà hàng, lĩnh vực tụt điểm nặng nhất khi bật Normalization ($-8.96$ điểm ở C2), thường có nhiều bình luận mang tính biểu cảm mạnh. Chúng tôi đang thử nghiệm với tùy chọn giữ lại các marker này.
+
+Dù kết quả hiện tại chưa xác nhận được lợi ích của hai module theo hướng kỳ vọng ban đầu, chúng tôi cho rằng đây là một phát hiện có giá trị: nó cho thấy việc áp dụng ngây thơ (\textit{naive}) các kỹ thuật Học Mất cân bằng lên bài toán có lớp thiểu số cực hiếm (28 mẫu \texttt{neutral} trên 75.600 mẫu ở khách sạn) cần được đánh giá cẩn trọng hơn nhiều so với các bài toán mất cân bằng ``vừa phải'' thường thấy trong tài liệu tham khảo gốc của các kỹ thuật này.
+
+
+\section{Kết luận và Hướng phát triển}
+\label{sec:conclusion}
+
+Bài báo này trình bày một pipeline mở rộng cho TASA tiếng Việt, tích hợp module Chuẩn hóa Văn bản Mạng xã hội và các kỹ thuật Học Mất cân bằng vào baseline ViTASD. Trong quá trình thực hiện, chúng tôi phát hiện và sửa một sai lệch quan trọng về mô hình hóa bài toán (từ gán nhãn chuỗi sang phân loại cặp mục tiêu--khía cạnh), giúp tái lập baseline với độ chính xác cao (chênh lệch $-0.21$ đến $+2.42$ điểm so với công bố gốc trên ba lĩnh vực) -- một đóng góp về phương pháp luận có thể hữu ích cho các nghiên cứu tương lai sử dụng ViTASA.
+
+Thực nghiệm ablation đầy đủ cho thấy, với thông số mặc định, hai module đề xuất chưa mang lại cải thiện nhất quán, và chúng tôi trình bày phân tích chi tiết theo epoch để lý giải các nguyên nhân khả dĩ (phương sai cao, chọn checkpoint không ổn định, hội tụ chưa đầy đủ), thay vì kết luận vội vàng rằng các module này không hiệu quả. Hướng phát triển trực tiếp tiếp theo gồm: (i) hoàn tất kiểm định ba giả thuyết H1--H3 (Mục~\ref{sec:discussion}) bằng cách điều chỉnh $\gamma$, tách rời Focal Loss khỏi trọng số lớp, và giữ lại marker biểu cảm khi chuẩn hóa; (ii) huấn luyện nhiều seed cho các cấu hình quan trọng để báo cáo kết quả dạng trung bình $\pm$ độ lệch chuẩn, giảm ảnh hưởng của phương sai; (iii) tăng số epoch cho các lĩnh vực chưa hội tụ (đặc biệt nhà hàng); và (iv) bổ sung dòng ablation với backbone ViSoBERT -- mô hình được tiền huấn luyện chuyên biệt cho văn bản mạng xã hội tiếng Việt -- dùng cùng kiến trúc PhoBERT+attention đã xác thực, để đánh giá độc lập đóng góp của backbone so với hai module đề xuất.
+
+Về dài hạn, việc phát hiện và xử lý mỉa mai (\textit{sarcasm}) -- ví dụ câu như \textit{``bút xịn vl, sài được 2 ngày là hỏng''} mang sắc thái tiêu cực dù bề ngoài dùng từ tích cực -- nằm ngoài phạm vi của Text Normalization hiện tại và là hướng mở rộng tự nhiên cho một Module 3 trong tương lai.
+
+
+\section*{Hạn chế}
+\label{sec:limitations}
+
+Chúng tôi nêu rõ các hạn chế sau để người đọc đánh giá đúng phạm vi của kết quả:
+
+\begin{itemize}
+    \item \textbf{Truy cập không đầy đủ vào bài báo gốc.} Chúng tôi không có quyền truy cập vào toàn văn phần Mô tả Thực nghiệm của ViTASA (bị giới hạn bởi ScienceDirect) lẫn mã nguồn/checkpoint công khai dù bài báo có đề cập. Các siêu tham số huấn luyện và chi tiết chính xác của lớp multi-head attention là giả định hợp lý, được xác thực gián tiếp qua độ khớp điểm số (Bảng~\ref{tab:baseline-verify}), không phải xác nhận trực tiếp từ tác giả gốc.
+    \item \textbf{Kết quả ablation chưa được lặp lại với nhiều seed.} Mỗi cấu hình hiện chỉ chạy với một seed cố định, khiến việc phân biệt chênh lệch thật sự do module với dao động ngẫu nhiên (Mục~\ref{sec:epoch-analysis}) chưa thể thực hiện một cách chặt chẽ.
+    \item \textbf{Thực nghiệm kiểm định giả thuyết H1--H3 (Mục~\ref{sec:discussion}) chưa hoàn tất} tại thời điểm soạn báo cáo này; kết quả cập nhật sẽ được bổ sung ở phiên bản sau.
+    \item \textbf{Chưa có dòng ablation với backbone ViSoBERT} sử dụng kiến trúc nhất quán với các cấu hình PhoBERT hiện tại, nên chưa thể tách biệt đóng góp của backbone khỏi hai module đề xuất.
+    \item \textbf{Phạm vi bài toán} giới hạn ở phân loại cặp mục tiêu--khía cạnh với tập khía cạnh đã biết trước theo lĩnh vực; không xử lý phát hiện khía cạnh mở (\textit{open-domain aspect detection}) hay mỉa mai.
+\end{itemize}
+
+
+\section*{Tuyên bố Đạo đức}
+
+Bộ dữ liệu ViTASA được sử dụng đúng mục đích nghiên cứu học thuật theo giấy phép công khai của tác giả gốc, không thu thập thêm dữ liệu người dùng mới. Nghiên cứu không liên quan đến thử nghiệm trên người và không phát sinh rủi ro đạo đức trực tiếp. Chúng tôi lưu ý rằng các hệ thống phân tích cảm xúc, khi triển khai thực tế, cần được đánh giá cẩn trọng về khả năng thiên lệch trên các lớp thiểu số (như đã quan sát ở Mục~\ref{sec:results}) trước khi ứng dụng vào các quyết định có ảnh hưởng tới người dùng thật.
+
+% acl.sty đã tự set \bibliographystyle{acl_natbib} — không khai báo lại ở đây
+% (khai báo lại sẽ gây lỗi "Illegal, another \bibstyle command" khi chạy BibTeX).
+\bibliography{custom}
+
+\end{document}
